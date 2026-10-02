@@ -1,0 +1,73 @@
+{
+  "manifest_version": 3,
+  "name": "Transcript Extractor",
+  "version": "4.3.0",
+  "description": "Extract lecture transcripts from any video site and export them as notes, subtitles, spreadsheets or retrieval-ready chunks.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "clipboardWrite",
+    "scripting",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://*.udemy.com/*",
+    "https://*.coursera.org/*",
+    "https://*.youtube.com/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Transcript Extractor",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "capture-frame": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Capture the current lecture frame"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.udemy.com/*",
+        "https://*.coursera.org/*",
+        "https://*.youtube.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "models/*"
+      ],
+      "matches": [
+        "https://*.udemy.com/*",
+        "https://*.coursera.org/*",
+        "https://*.youtube.com/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
