@@ -2,7 +2,7 @@
 
 Copy each block into the matching field in the Developer Dashboard.
 
-The current live listing still advertises "WebLLM AI integration is currently
+Historical listing notes below are not a verification of the current live listing. The earlier listing advertised "WebLLM AI integration is currently
 experimental and not fully functional". That feature was removed three versions
 ago. Replacing this copy is the single highest-value thing in this file.
 
@@ -33,19 +33,19 @@ Turn video lectures into notes you can actually use.
 
 Transcript Extractor pulls the transcript from a lecture, keeps it as you work
 through a course, and lets you search, summarise and export it — without
-sending a single byte anywhere.
+uploading your library to a cloud service. Extraction can request captions and metadata from the source platform.
 
 
 WHAT IT DOES
 
-• Extract the transcript from any lecture in one click
-• Collect a whole course as you go, instead of one video at a time
+• Extract available captions from supported video pages
+• Collect a course with saved progress, resume, and retry-failed controls
 • Read it as prose, not as a wall of two-second caption lines
 • Highlight passages and write notes without leaving the video
 • Click any timestamp to send the video back to that exact moment
 • Search across every course you have collected, in your own words
 • Capture screenshots of code, diagrams and slides
-• Export your notes, or the transcript, in a format you can take anywhere
+• Export notes and transcripts; back up and restore the complete local library
 
 
 STUDY, NOT JUST EXTRACT
@@ -62,9 +62,9 @@ Two shortcuts keep you in the lecture while you are watching it:
 
 Both pause the video, take the moment, and let it carry on.
 
-And every timestamp is a control. Click one in your notes, your highlights or a
-search result and the lecture's own player jumps there — no scrubbing the
-timeline hunting for the line you just read.
+Click a timestamp in notes, highlights, or search to seek the video.
+When timing is estimated from the video duration, it is labeled approximate.
+Subtitle export requires source timestamps.
 
 
 SEARCH THAT UNDERSTANDS THE QUESTION
@@ -114,8 +114,8 @@ Exports with screenshots download as a zip: the document plus an images folder.
 WHERE IT WORKS
 
 Dedicated support for Udemy, Coursera and YouTube, plus a generic extractor
-that reads captions from any standard HTML5 player — Panopto, Kaltura,
-Echo360, Moodle, edX and most self-hosted lecture players.
+that attempts to read accessible captions from standard HTML5 players when you invoke it.
+Coverage depends on the player, permissions, and caption availability.
 
 
 GENUINELY LOCAL
@@ -124,7 +124,7 @@ No account. No API key. No server. No analytics.
 
 The search model ships inside the extension, so nothing is downloaded and
 nothing is uploaded. Your transcripts, screenshots and searches never leave
-your machine, and the extension makes no network requests at all while it runs.
+your machine. Caption extraction may make requests to the source platform.
 
 Open source, MIT licensed.
 ```
@@ -182,8 +182,8 @@ Copies the extracted transcript to the clipboard when the user asks for it.
 
 **Host permissions (udemy.com, coursera.org, youtube.com)**
 ```
-The extension reads transcripts from these three platforms. It does not request
-access to all sites and does not run anywhere else.
+The extension runs automatically on these three platforms. It requests no persistent all-sites
+access; user-invoked activeTab access also permits generic caption extraction elsewhere.
 ```
 
 ### Data usage disclosures
@@ -234,7 +234,8 @@ issued when the user invokes the extension — which a commands shortcut does an
 a keypress on the page does not. The worker holds no state, registers one
 listener, and makes no network calls.
 
-The extension makes no network requests at runtime. Where Chrome's built-in
+Caption extraction may request source-platform captions and metadata. The bundled search
+model is not downloaded at runtime. Where Chrome's built-in
 on-device model is available it is used for optional screenshot reading and
 summary writing; that model belongs to the browser, is invoked only after an
 explicit user action, and processes data locally.
@@ -255,5 +256,5 @@ Worth capturing, in this order:
 4. The popup on a lecture mid-extraction — the core loop
 5. The study-notes export open in Obsidian, marks and all
 
-The images in `store-assets/` predate the dashboard entirely, so none of them
-show the reader, highlights, notes, seek or the study export.
+Use fresh screenshots of the current library, restore preview, reader, and search.
+Label demonstration data accurately. The paid-beta checkout does not implement payment or licensing.

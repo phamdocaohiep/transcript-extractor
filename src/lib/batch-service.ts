@@ -1,3 +1,5 @@
+import { groupKey } from './identity';
+import { isPageContext } from './context';
 /**
  * Batch extraction service for walking and extracting entire courses.
  *
@@ -19,6 +21,10 @@ export interface BatchItem {
 }
 
 export interface BatchState {
+  runId?: string;
+  ownerTabId?: number;
+  revision?: number;
+  error?: string;
   isActive: boolean;
   isPaused: boolean;
   courseTitle: string;
@@ -37,29 +43,33 @@ export const BATCH_STORAGE_KEY = 'course_batch_state';
  * Load the active batch state from storage.
  */
 export async function getBatchState(): Promise<BatchState | null> {
-  try {
-    if (typeof chrome === 'undefined' || !chrome.storage?.local) return null;
-    const result = await chrome.storage.local.get(BATCH_STORAGE_KEY);
-    return (result[BATCH_STORAGE_KEY] as BatchState | undefined) ?? null;
-  } catch {
-    return null;
+  if (isPageContext()) {
+    const response = await chrome.runtime.sendMessage({ type: 'READ_BATCH_STATE' });
+    if (!response?.success) throw new Error(response?.error || 'Could not read collection progress.');
+    return response.data;
   }
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return null;
+  const result = await chrome.storage.local.get(BATCH_STORAGE_KEY);
+  const state = (result[BATCH_STORAGE_KEY] as BatchState | undefined) ?? null;
+  if (state?.isActive && chrome.tabs?.get) {
+    const owner = state.ownerTabId === undefined ? null : await chrome.tabs.get(state.ownerTabId).catch(() => null);
+    if (!owner || groupKey(owner.url) !== groupKey(state.courseUrl)) {
+      return { ...state, isPaused: true, error: 'The original video tab is closed or has left this course. Open the same course or playlist and resume.' };
+    }
+  }
+  return state;
 }
 
-/**
- * Save updated batch state to storage.
- */
 export async function setBatchState(state: BatchState | null): Promise<void> {
-  try {
-    if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
-    if (state === null) {
-      await chrome.storage.local.remove(BATCH_STORAGE_KEY);
-    } else {
-      await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: state });
-    }
-  } catch {
-    // Storage failure should never crash the caller
+  if (isPageContext()) {
+    const response = await chrome.runtime.sendMessage({ type: 'WRITE_BATCH_STATE', data: state });
+    if (!response?.success) throw new Error(response?.error || 'Could not save collection progress.');
+    if (state && response.data) Object.assign(state, response.data);
+    return;
   }
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) throw new Error('Storage unavailable.');
+  if (state === null) await chrome.storage.local.remove(BATCH_STORAGE_KEY);
+  else await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: state });
 }
 
 /**

@@ -1,3 +1,4 @@
+import { log } from './log';
 /**
  * Local semantic search, running in the popup.
  *
@@ -17,7 +18,7 @@ import { rankChunks, type RankOptions, type SearchHit } from './semantic-search'
 import { detectBoundaries, buildSegments, type Segment } from './segmentation';
 import { extractCandidates, rankKeyphrases, type Keyphrase } from './keyphrases';
 import { BM25Index, fuseRankings } from './bm25';
-import { buildChunks, cleanCues, groupIntoParagraphs, parseTranscript } from './transcript';
+import { timingOf, TIMING_NOTICE, buildChunks, cleanCues, groupIntoParagraphs, parseTranscript } from './transcript';
 import {
   assignParagraphs,
   buildOrganizedMarkdown,
@@ -50,6 +51,11 @@ interface IndexedChunk {
   vector: Float32Array;
 }
 
+/** Content, rather than record counts, determines whether a cached index is reusable. */
+export function indexSignature(chunks: { chunkIndex: number; text: string }[], scope: string): string {
+  return JSON.stringify([scope, chunks.map(chunk => [chunk.chunkIndex, chunk.text])]);
+}
+
 export class SearchService {
   private embedder: StaticEmbedder | null = null;
   private loading: Promise<StaticEmbedder> | null = null;
@@ -60,6 +66,7 @@ export class SearchService {
   /** Keyword index. Built synchronously, so search works before the model loads. */
   private lexical = new BM25Index();
   private lexicalFor: string | null = null;
+  private generation = 0;
 
   /**
    * Load the model once per popup lifetime.
@@ -79,7 +86,7 @@ export class SearchService {
 
       const data = await loadStaticModel(baseUrl);
       const embedder = new StaticEmbedder(data);
-      console.log(
+      log.debug(
         `[search] model loaded in ${(performance.now() - started).toFixed(0)}ms ` +
           `(${data.tokenizer.vocab.length} tokens x ${data.dims} dims, no inference runtime)`,
       );
@@ -106,14 +113,19 @@ export class SearchService {
    * afterwards by `indexSemantic`.
    */
   indexLexical(chunks: { chunkIndex: number; text: string }[], signature: string): number {
+    signature = indexSignature(chunks, signature);
     if (this.lexicalFor === signature && this.lexical.size > 0) return this.lexical.size;
 
+    this.generation++;
+    this.vectors = [];
+    this.texts.clear();
+    this.indexedFor = null;
     const started = performance.now();
     this.lexical.clear();
     this.lexical.add(chunks);
     this.lexicalFor = signature;
 
-    console.log(
+    log.debug(
       `[search] keyword index over ${chunks.length} chunks in ` +
         `${(performance.now() - started).toFixed(0)}ms (no model)`,
     );
@@ -132,6 +144,8 @@ export class SearchService {
     signature: string,
     onProgress?: (progress: IndexProgress) => void,
   ): Promise<number> {
+    signature = indexSignature(chunks, signature);
+    const generation = ++this.generation;
     if (this.indexedFor === signature && this.vectors.length > 0) {
       return this.vectors.length;
     }
@@ -161,6 +175,7 @@ export class SearchService {
       }
     }
 
+    if (generation !== this.generation) return 0;
     this.vectors = next;
     // Kept so chapters can be named from their own text. Titling needs the
     // words, not just the vectors, and re-deriving them would mean chunking
@@ -168,7 +183,7 @@ export class SearchService {
     this.texts = new Map(chunks.map((chunk) => [chunk.chunkIndex, chunk.text]));
     this.indexedFor = signature;
 
-    console.log(
+    log.debug(
       `[search] semantic index over ${next.length} chunks in ` +
         `${(performance.now() - started).toFixed(0)}ms`,
     );
@@ -283,7 +298,7 @@ export class SearchService {
       );
     });
 
-    console.log(
+    log.debug(
       `[search] analysed ${chapters.length} chapters and ${concepts.length} concepts ` +
         `in ${(performance.now() - started).toFixed(0)}ms`,
     );
@@ -344,7 +359,7 @@ export class SearchService {
       })
       .filter((entry) => entry.sentences.length > 0);
 
-    console.log(
+    log.debug(
       `[search] summarised ${sentences.length} sentences into ${overall.length} lines ` +
         `and ${perChapter.length} chapter summaries in ${(performance.now() - started).toFixed(0)}ms`,
     );
@@ -416,12 +431,13 @@ export class SearchService {
       (index) => titles[index] ?? `Part ${index + 1}`,
     );
 
-    console.log(
+    log.debug(
       `[search] organised ${cues.length} cues into ${sections.length} sections ` +
         `in ${(performance.now() - started).toFixed(0)}ms`,
     );
 
-    return buildOrganizedMarkdown(sections, meta);
+    const markdown = buildOrganizedMarkdown(sections, meta);
+    return timingOf(transcriptText) === 'estimated' ? `${markdown}\n> ${TIMING_NOTICE}\n` : markdown;
   }
 
   get indexedCount(): number {
@@ -429,6 +445,10 @@ export class SearchService {
   }
 
   clear(): void {
+    this.generation++;
+    this.lexical.clear();
+    this.lexicalFor = null;
+    this.texts.clear();
     this.vectors = [];
     this.indexedFor = null;
   }

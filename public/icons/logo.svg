@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Transcript Extractor">
+  <!-- Source for the PNG icons. Tile #1D1D1F, lines #FFFFFF, dot #FF4D52, corner 30%. -->
+  <rect width="128" height="128" rx="38" fill="#1D1D1F"/>
+  <g transform="translate(30.12 30.12) scale(2.8235)" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round">
+    <path d="M5 7h14M5 12h10M5 17h7"/>
+    <circle cx="18" cy="17" r="2.5" fill="#FF4D52" stroke="none"/>
+  </g>
+</svg>

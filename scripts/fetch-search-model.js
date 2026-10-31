@@ -23,7 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
 const MODEL_ID = 'minishlab/potion-base-8M';
-const REVISION = 'main';
+const REVISION = 'bf8b056651a2c21b8d2565580b8569da283cab23';
 const DEST = path.join(ROOT, 'public', 'models', 'search');
 
 function humanSize(bytes) {
@@ -148,6 +148,7 @@ async function main() {
     path.join(DEST, 'vocab.json'),
     JSON.stringify({
       modelId: MODEL_ID,
+      revision: REVISION,
       vocabSize,
       dims,
       normalize: config.normalize !== false,

@@ -7,8 +7,8 @@ elsewhere — entirely on your own machine.
 [![Version](https://img.shields.io/badge/version-4.3.0-green.svg)](https://github.com/pras-ops/udemy-transcript-extractor)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-No account, no server, no telemetry. The extension makes **no network requests at all** while it
-runs.
+No account, no server, no telemetry. Your library is stored and processed locally.
+Extraction may fetch captions and metadata from the source platform using your browser session.
 
 ---
 
@@ -36,8 +36,9 @@ prose → mark a passage → jump back to the exact moment → search every cour
 - **One click, any lecture.** Dedicated extractors for Udemy, Coursera and YouTube, plus a generic
   extractor that reads caption data from any standard HTML5 player — Panopto, Kaltura, Echo360,
   Canvas Studio, Moodle, edX and most self-hosted lecture players.
-- **A whole course, not one video.** Lectures accumulate as you work through a course, and the
-  *Next lecture & extract* button walks the curriculum for you.
+- **Collect a course.** Lectures accumulate as you work through it. Batch collection keeps
+  committed progress, offers resume and retry-failed controls, and belongs to its original tab.
+  Open the same course or playlist before resuming an interrupted run.
 - **Cleanup that matters.** Filler words removed, duplicate and rolling caption lines collapsed,
   out-of-order cues repaired (Udemy's transcript panel is virtualised and hands them over scrambled),
   and technical vocabulary repaired — "Jupiter notebook" → "Jupyter Notebook", "numb pie" → "NumPy".
@@ -54,7 +55,7 @@ prose → mark a passage → jump back to the exact moment → search every cour
 - **Screenshots while watching.** `Alt+Shift+S` captures the frame you are looking at. A transcript
   cannot show a diagram or a line of code; the still can.
 - **Jump back to the video.** Every timestamp — in the reader, your highlights, your notes, search
-  results — puts the lecture's own player on that moment.
+  results — seeks the lecture's player. Duration-based timestamps are labeled approximate.
 
 ### Understand
 
@@ -264,7 +265,7 @@ npm run deploy
 1. Open a lecture and make sure its transcript panel is open — the extension reads what the player
    renders, it does not transcribe audio itself
 2. Click the extension icon → **Extract transcript**
-3. Keep going with **Next lecture & extract** to collect the course
+3. Collect the course, or extract individual videos. Reopen the popup to resume or retry failed items.
 
 ### While watching
 
@@ -304,9 +305,11 @@ failing silently.
 
 Worth knowing before you rely on it:
 
-- **No backup or restore yet.** The library lives in one browser profile's IndexedDB. Clearing site
-  data, switching machines or corrupting a profile loses it. Markdown export is per lecture or per
-  course and is not a restore path. This is the next thing on the roadmap.
+- **Back up your library.** Use **Download backup** in the library sidebar. The versioned JSON
+  file includes transcripts, notes, highlights, completion metadata, and PNG screenshots.
+  **Restore backup** validates the file and previews counts before merging; existing IDs are kept.
+  Files larger than 250 MB are refused. Browser preferences and active collection jobs are not
+  included. Clearing browser data or uninstalling still removes the local library.
 - **One machine.** There is no sync, by design — but that does mean your notes are where you made
   them.
 - **DRM blocks frame capture.** A protected player returns a black rectangle rather than an error.
@@ -323,7 +326,7 @@ Worth knowing before you rely on it:
 
 Everything runs on your machine, and the build enforces it:
 
-- No network calls at runtime — the search model ships inside the package
+- No library uploads or analytics; source-platform caption requests may occur during extraction
 - No telemetry, analytics, crash reporting or remote configuration
 - No account, ever
 - Host permissions limited to the three supported platforms; **no all-URLs permission**, and
@@ -344,17 +347,16 @@ Everything runs on your machine, and the build enforces it:
 | Search | Model2Vec static embeddings + BM25, fused with RRF |
 | Storage | IndexedDB for the library, `chrome.storage` for preferences |
 
-**Requirements:** Chrome 88+ for everything in tier one — Manifest V3, the service worker and the
-`commands` shortcuts all date from there. The tier-two AI features need a considerably newer Chrome
-plus supported hardware; the extension probes rather than checking a version number, so the honest
-answer is "it will tell you". Node 18+ to build.
+**Requirements:** A current desktop Chrome release. Older Chrome versions are not certified by
+this project. Optional on-device AI additionally depends on browser APIs and supported hardware;
+capabilities are probed before they are offered. Use Node 22 or newer for development and tests.
 
 ---
 
 ## 📊 Status
 
-**v4.3.0** — 543 tests across 24 files; typecheck, lint and the eight Chrome Web Store compliance
-gates all pass.
+**v4.3.0 development checkout** — run `npm run verify` and `npm run deploy` for current results.
+Automated checks do not certify live platform compatibility or Chrome Web Store acceptance.
 
 ### Development philosophy
 
@@ -367,13 +369,12 @@ gates all pass.
 
 ## 🔮 What's next
 
-1. **Backup and restore** — a JSON dump of the library and a way to load it back. The most important
-   missing piece.
+1. **Paid-beta validation** — test resumable collection and recovery with representative users.
 2. **Honest extraction failure** — when a site redesign breaks a selector, say *"the site changed,
    update the extension"* rather than returning nothing.
-3. **Real captured fixtures** for the extractor tests — see the caveat in
+3. **More captured fixtures** — one sanitized Udemy caption panel is included; Coursera and successful YouTube extraction still need live coverage. See
    [docs/TECHNICAL.md](docs/TECHNICAL.md).
-4. **Onboarding** — nothing currently tells a new user the dashboard exists.
+4. **Onboarding validation** — the library now includes a Getting started guide; validate it with new users.
 5. **More platforms** — LinkedIn Learning, Khan Academy, on request.
 
 ---
@@ -404,3 +405,8 @@ Issues and feature requests on GitHub. 📧 jacobprashant20@gmail.com
 ---
 
 **⭐ If this saves you time, a star on GitHub is appreciated.**
+
+
+## Script chạy và đóng gói
+
+[scripts/README.md](scripts/README.md) mô tả các entrypoint `.sh`/`.ps1`, `-f`, `--stop`, `--clean` và prerequisites.

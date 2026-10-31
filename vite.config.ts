@@ -24,9 +24,7 @@ export default defineConfig({
       // this multi-entry build hoists shared modules into chunks pulled in with
       // `import`, which a content script cannot execute. It gets its own IIFE
       // build in vite.content.config.ts.
-      // Only the popup. The extension no longer has a service worker or an
-      // offscreen document: both existed to host an inference runtime, and the
-      // static embedding model does not need one.
+      // The worker is built separately as a classic script.
       input: {
         main: path.resolve(__dirname, 'index.html'),
         // The library, as a full extension page. Unlike the popup it is not

@@ -37,9 +37,6 @@ async function buildExtension() {
     console.log('✓ Copied icons');
   }
 
-  // Note: the WebLLM chat model is not bundled. It is fetched from the MLC CDN
-  // on first use and cached by the browser, and only after the user opts in.
-
   // The semantic-search model IS bundled: it is ~23 MB, and shipping it means
   // no CDN fetch, no host permission for one, and search that works offline.
   const modelsDir = path.join(__dirname, '../public/models');
@@ -56,4 +53,4 @@ async function buildExtension() {
   console.log('🔧 Load the dist/ folder as an unpacked extension in Chrome');
 }
 
-buildExtension().catch(console.error);
+buildExtension().catch(error => { console.error(error); process.exitCode = 1; });

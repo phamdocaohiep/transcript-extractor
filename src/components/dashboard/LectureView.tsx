@@ -1,3 +1,4 @@
+import { timingOf, TIMING_NOTICE } from '../../lib/transcript';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -36,8 +37,8 @@ import {
   deleteTranscript,
   getCourse,
   getTranscript,
+  getLecture,
   listHighlights,
-  listLectures,
   listNotes,
   listScreenshots,
   saveHighlight,
@@ -142,11 +143,13 @@ export const LectureView: React.FC<LectureViewProps> = ({ lectureId, onBack, onC
   const [screenshots, setScreenshots] = useState<ScreenshotRecord[]>([]);
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [tab, setTab] = useState<Tab>('transcript');
+  const [estimated, setEstimated] = useState(false);
   const [filter, setFilter] = useState('');
   const [copied, setCopied] = useState(false);
   const [reader, setReader] = useState<Reader>(storedReader);
 
   const [exportOpen, setExportOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   /**
    * Something to say about the last jump, when there is anything to say.
@@ -271,10 +274,13 @@ export const LectureView: React.FC<LectureViewProps> = ({ lectureId, onBack, onC
       return;
     }
     try {
+      setDeleteError(null);
       await deleteLecture(lecture.id);
+      onChanged();
       onBack();
     } catch (err) {
       console.error('Failed to delete lecture:', err);
+      setDeleteError(err instanceof Error ? err.message : 'Deletion failed. Please retry.');
     }
   };
 
@@ -284,11 +290,22 @@ export const LectureView: React.FC<LectureViewProps> = ({ lectureId, onBack, onC
       return;
     }
     try {
+      setDeleteError(null);
       await deleteTranscript(lecture.id);
       setCues([]);
       setLecture((cur) => (cur ? { ...cur, wordCount: 0 } : null));
+      setKeyMoments(null);
+      setConcepts([]);
+      setWritten(null);
+      setOutline([]);
+      setDefinitions([]);
+      setChapterProse({});
+      setInsightState('idle');
+      setInsightError(null);
+      onChanged();
     } catch (err) {
       console.error('Failed to delete transcript:', err);
+      setDeleteError(err instanceof Error ? err.message : 'Deletion failed. Please retry.');
     }
   };
 
@@ -646,19 +663,20 @@ export const LectureView: React.FC<LectureViewProps> = ({ lectureId, onBack, onC
     let cancelled = false;
 
     (async () => {
-      const transcript = await getTranscript(lectureId).catch(() => undefined);
+      const [transcript, entry] = await Promise.all([
+        getTranscript(lectureId).catch(() => undefined),
+        getLecture(lectureId).catch(() => undefined),
+      ]);
       if (cancelled) return;
+      setEstimated(timingOf(transcript?.text ?? '') === 'estimated');
       setCues(transcript ? cleanCues(parseTranscript(transcript.text)) : []);
+      setLecture(entry ?? null);
 
-      const courseId = transcript?.courseId;
+      const courseId = entry?.courseId;
       if (courseId) {
-        const [found, inCourse] = await Promise.all([
-          getCourse(courseId).catch(() => undefined),
-          listLectures(courseId).catch(() => [] as LectureRecord[]),
-        ]);
+        const found = await getCourse(courseId).catch(() => undefined);
         if (cancelled) return;
         setCourse(found ?? null);
-        setLecture(inCourse.find((entry) => entry.id === lectureId) ?? null);
       }
 
       const [shots, found, marked] = await Promise.all([
@@ -826,6 +844,8 @@ export const LectureView: React.FC<LectureViewProps> = ({ lectureId, onBack, onC
 
   return (
     <div>
+      {estimated && <p role="note" className="te-note te-note--warn">{TIMING_NOTICE}</p>}
+      {deleteError && <p role="alert" className="text-sm text-red-600">{deleteError}</p>}
       <button
         onClick={onBack}
         className="inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 mb-3 transition-colors"

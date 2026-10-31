@@ -1,3 +1,4 @@
+import { handleBatchRequest } from './lib/batch-controller';
 /**
  * The extension's one background job: capturing a frame from a keystroke.
  *
@@ -231,13 +232,19 @@ chrome.commands.onCommand.addListener((command) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (['READ_BATCH_STATE', 'WRITE_BATCH_STATE', 'RESUME_BATCH', 'RETRY_BATCH'].includes(message?.type)) {
+    void handleBatchRequest(message.type, message.data ?? null, _sender.tab).then(
+      data => sendResponse({ success: true, data }),
+      error => sendResponse({ success: false, error: error instanceof Error ? error.message : 'Collection failed.' }),
+    );
+    return true;
+  }
   if (message?.type === 'SAVE_LECTURE_TO_LIBRARY') {
     void (async () => {
       try {
         const { lecture, meta } = message.data || {};
-        if (lecture) {
-          await saveLecture(lecture, meta);
-        }
+        if (!lecture?.id || typeof lecture.transcript !== 'string') throw new Error('Invalid transcript entry.');
+        await saveLecture(lecture, meta);
         sendResponse({ success: true });
       } catch (err) {
         console.warn('[library] background saveLecture failed:', err);

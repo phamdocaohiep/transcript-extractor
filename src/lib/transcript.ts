@@ -11,6 +11,14 @@
 
 import { fixTechnicalTerms } from './tech-terms';
 
+export const ESTIMATED_TIMING_MARKER = '<!-- timing: estimated -->';
+export const TIMING_NOTICE = 'Timestamps are approximate, estimated from the video duration.';
+export type Timing = 'source' | 'estimated' | 'unknown';
+export function timingOf(raw: string): Timing {
+  if (raw.includes(ESTIMATED_TIMING_MARKER)) return 'estimated';
+  return /^\[\d{1,2}:\d{2}(?::\d{2})?\]/m.test(raw) ? 'source' : 'unknown';
+}
+
 export interface Cue {
   /** Seconds from video start, or null when the source line carried no timestamp. */
   startSeconds: number | null;
@@ -36,6 +44,7 @@ export interface Chunk {
 }
 
 export interface SourceMeta {
+  timing?: Timing;
   title?: string;
   platform?: 'udemy' | 'youtube' | 'coursera' | 'generic' | 'unknown';
   /** Canonical page URL, used to build per-chunk deep links. */
@@ -83,6 +92,7 @@ export function formatTimestamp(totalSeconds: number): string {
  */
 export function parseTranscript(raw: string): Cue[] {
   if (!raw) return [];
+  raw = raw.split(ESTIMATED_TIMING_MARKER).join('').trim();
   const cues: Cue[] = [];
 
   for (const block of raw.split(/\n\s*\n/)) {

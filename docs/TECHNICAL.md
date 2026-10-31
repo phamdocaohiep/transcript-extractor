@@ -186,7 +186,7 @@ looser and will miss real errors that the build then fails on.
 
 ### Testing DOM code
 
-Tests default to `node` because almost all of them are pure; booting jsdom for all 543 costs seconds
+Tests default to `node` because almost all of them are pure; booting jsdom for every test costs seconds
 on every run.
 
 Files needing a DOM are named `*.dom.test.ts` **and declare `// @vitest-environment jsdom` on their
@@ -209,21 +209,21 @@ hand-built to the selector contract the extractor depends on, and their header s
 do give you is a regression guard against refactors and a precise statement of which selector a
 redesign invalidated. What they cannot tell you is whether Udemy still looks like that.
 
-Replacing them with markup captured from a live lecture page is on the roadmap. Until then, treat a
+A sanitized live Udemy untimed-caption fixture now lives in `src/lib/__fixtures__/udemy-untimed.html`.
+Other fixtures remain synthetic; live Coursera and successful YouTube coverage are still pending. Until then, treat a
 green extractor suite as "the parsing logic is intact", never as "extraction works".
 
 ## Requirements
 
-- Chrome 88+ for everything in tier one — Manifest V3, the service worker and `commands` all date
-  from there
+- A current desktop Chrome release; older browser versions are not certified
 - A considerably newer Chrome, plus supported hardware, for the tier-two AI features. The code
   probes rather than checking versions
-- Node 18+ to build
+- Node 22+ for development and tests
 - An account on the platform whose lectures you are reading
 
 ## Privacy properties
 
-- No network calls at runtime. The search model ships inside the package.
+- The search model ships inside the package. Extraction may request source-platform captions and metadata; library processing stays local.
 - No telemetry, no analytics, no remote configuration, no account.
 - Host permissions are restricted to the three supported platforms; there is no all-URLs
   permission, and `check:store` fails the build if one appears.
@@ -233,9 +233,10 @@ green extractor suite as "the parsing logic is intact", never as "extraction wor
 
 ## Known gaps
 
-- **No library backup or restore.** The library is one profile's IndexedDB; clearing site data loses
-  it. Markdown export is not a restore path. The schema in `library-schema.ts` is pure and tested,
-  so a JSON dump plus import is bounded work.
+- **Recovery limits.** Download a versioned JSON backup from the library sidebar. It includes
+  all six record stores and inline PNG assets, up to 250 MB. Restore validates relationships
+  and merges all stores in one transaction, keeping existing keys. Browser preferences and
+  active collection jobs are excluded. Uninstalling still removes the local library.
 - **Extraction failure is quiet.** A site redesign returns nothing rather than saying the site
   changed.
 - **DRM blocks capture** on protected players. `classifyFrame` detects the blank result and reports

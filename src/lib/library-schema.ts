@@ -1,3 +1,5 @@
+import { ESTIMATED_TIMING_MARKER, timingOf, type Timing } from './transcript';
+import { groupKey } from './identity';
 /**
  * The shape of a local learning library.
  *
@@ -106,6 +108,7 @@ export function activityCount(activity: LectureActivity): number {
 }
 
 export interface TranscriptRecord {
+  timing?: Timing;
   /** Same id as the lecture it belongs to. */
   lectureId: string;
   courseId: string;
@@ -153,6 +156,7 @@ export interface HighlightRecord {
 /** Word count that ignores `[00:00]` markers, matching the collection's count. */
 export function countWords(transcript: string): number {
   return transcript
+    .split(ESTIMATED_TIMING_MARKER).join('')
     .replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, ' ')
     .split(/\s+/)
     .filter(Boolean).length;
@@ -166,15 +170,7 @@ export function countWords(transcript: string): number {
  * same identities a freshly collected course would.
  */
 export function courseIdFromUrl(url: string | undefined): string {
-  if (!url) return 'course:unknown';
-  try {
-    const parsed = new URL(url);
-    const slug = parsed.pathname.match(/^\/course\/([^/]+)/);
-    if (slug) return `course:${parsed.origin}/course/${slug[1]}`;
-    return `course:${parsed.origin}${parsed.pathname}`;
-  } catch {
-    return `course:${url}`;
-  }
+  return 'course:' + groupKey(url);
 }
 
 /** Recover a course id from an existing `collection:…` storage key. */
@@ -263,6 +259,7 @@ export function toLibraryRecords(
         lectureId: lecture.id,
         courseId,
         text: lecture.transcript,
+        timing: timingOf(lecture.transcript),
         savedAt: Number.isFinite(lecture.collectedAt) ? lecture.collectedAt : now,
       });
     }

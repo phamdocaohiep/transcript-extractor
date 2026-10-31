@@ -33,3 +33,17 @@ describe('isCourseraCoursePage', () => {
     }
   });
 });
+
+// These are deliberately synthetic regression cases; no live Coursera fixture is available yet.
+describe('caption timing', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+  it('keeps untimed phrases untimed rather than inventing five-minute offsets', async () => {
+    document.body.innerHTML = '<div class="rc-Paragraph"><span class="rc-Phrase">First</span><span class="rc-Phrase">Second</span></div>';
+    const result = await CourseraExtractor.extractTranscript();
+    expect(result).toBe('First\n\nSecond');
+  });
+  it('emits canonical source timestamps that the shared parser can read', async () => {
+    document.body.innerHTML = '<div class="rc-Paragraph"><span class="timestamp">01:23</span><span class="rc-Phrase">Caption</span></div>';
+    expect(await CourseraExtractor.extractTranscript()).toBe('[01:23] Caption');
+  });
+});

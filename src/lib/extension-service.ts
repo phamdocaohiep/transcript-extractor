@@ -1,9 +1,12 @@
+import { log } from './log';
 // Extension Service for communicating with content script
 import { UdemyCourse } from './udemy-extractor';
 import { lectureId } from './collection';
 import { errorMessage } from './utils';
 import type { BatchState } from './batch-service';
 import {
+  timingOf,
+  TIMING_NOTICE,
   buildChunks,
   buildDeepLink,
   cleanCues,
@@ -233,19 +236,19 @@ export class ExtensionService {
         throw new Error('No active tab found');
       }
 
-      console.log('🎯 Sending message to tab:', tab.id, 'Message:', message);
+      log.debug('🎯 Sending message to tab:', tab.id, 'Message:', message);
       
       try {
         const response = await chrome.tabs.sendMessage(tab.id, message);
-        console.log('🎯 Received response:', response);
+        log.debug('Page response received.');
         return response;
       } catch (connectionError) {
         // If connection fails, try to inject content script and retry
         if (errorMessage(connectionError).includes('Receiving end does not exist')) {
-          console.log('🎯 Content script not found, attempting to inject...');
+          log.debug('🎯 Content script not found, attempting to inject...');
           
           try {
-            console.log('🎯 Attempting to inject content script...');
+            log.debug('🎯 Attempting to inject content script...');
             
             // Inject the content script
             const injectionResult = await chrome.scripting.executeScript({
@@ -255,26 +258,26 @@ export class ExtensionService {
             
             // Also try injecting the script directly if file injection fails
             if (!injectionResult || injectionResult.length === 0) {
-              console.log('🎯 File injection failed, trying direct script injection...');
+              log.debug('🎯 File injection failed, trying direct script injection...');
               await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: () => {
                   // This will be executed in the page context
-                  console.log('🎯 Direct script injection executed');
+                  log.debug('🎯 Direct script injection executed');
                 }
               });
             }
             
-            console.log('🎯 Content script injection result:', injectionResult);
-            console.log('🎯 Content script injected, waiting for initialization...');
+            log.debug('🎯 Content script injection result:', injectionResult);
+            log.debug('🎯 Content script injected, waiting for initialization...');
             
             // Wait a moment for the script to initialize
             await new Promise(resolve => setTimeout(resolve, 2000));
             
             // Retry the message
-            console.log('🎯 Retrying message after content script injection...');
+            log.debug('🎯 Retrying message after content script injection...');
             const response = await chrome.tabs.sendMessage(tab.id, message);
-            console.log('🎯 Received response after injection:', response);
+            log.debug('Page response received after injection.');
             return response;
           } catch (injectionError) {
             console.error('🎯 Failed to inject content script:', injectionError);
@@ -504,7 +507,10 @@ export class ExtensionService {
     videoTitle?: string,
     meta: SourceMeta = {},
   ): string {
-    const source: SourceMeta = { ...meta, title: meta.title ?? videoTitle };
+    const source: SourceMeta = { ...meta, timing: timingOf(transcript), title: meta.title ?? videoTitle };
+    if (source.timing === 'estimated' && (format === 'srt' || format === 'vtt')) {
+      throw new Error('Subtitle export needs source timestamps. This transcript has estimated timing; export Markdown or JSON instead.');
+    }
     const cues = cleanCues(parseTranscript(transcript));
 
     switch (format) {
@@ -559,11 +565,12 @@ export class ExtensionService {
       });
     }
 
-    const perLectureMeta = (lecture: { title: string; url?: string }): SourceMeta => ({
+    const perLectureMeta = (lecture: { title: string; url?: string; transcript: string }): SourceMeta => ({
       ...meta,
       title: lecture.title,
       url: lecture.url,
       courseTitle: meta.courseTitle,
+      timing: timingOf(lecture.transcript),
     });
 
     switch (format) {
@@ -585,11 +592,13 @@ export class ExtensionService {
           {
             course: meta.courseTitle ?? meta.title ?? null,
             savedAt: formatSavedAt(),
-            extractedAt: new Date().toISOString(),
+            timing: meta.timing ?? 'unknown',
+        extractedAt: new Date().toISOString(),
             lectureCount: lectures.length,
             lectures: lectures.map((lecture, i) => ({
               order: i + 1,
               title: lecture.title,
+              timing: timingOf(lecture.transcript),
               url: lecture.url ?? null,
               cues: cleanCues(parseTranscript(lecture.transcript)).map((cue) => ({
                 ...(includeTimestamps && cue.startSeconds !== null
@@ -615,6 +624,7 @@ export class ExtensionService {
             metadata: {
               lecture_order: i + 1,
               lecture_title: lecture.title,
+              timing: timingOf(lecture.transcript),
               lecture_url: lecture.url ?? null,
               chunk_index: chunk.chunkIndex,
               start_seconds: chunk.startSeconds,
@@ -634,7 +644,8 @@ export class ExtensionService {
               course: meta.courseTitle ?? meta.title ?? null,
               platform: meta.platform ?? 'unknown',
               lecture_count: lectures.length,
-              extracted_at: new Date().toISOString(),
+              timing: meta.timing ?? 'unknown',
+          extracted_at: new Date().toISOString(),
               saved_at: formatSavedAt(),
             },
             chunking: {
@@ -711,7 +722,7 @@ export class ExtensionService {
             .join('\n\n')
             .trim();
 
-          return [`## ${i + 1}. ${lecture.title}`, section];
+          return [`## ${i + 1}. ${lecture.title}`, ...(timingOf(lecture.transcript) === 'estimated' ? [`> ${TIMING_NOTICE}`] : []), section];
         });
 
         return [...head, ...body].join('\n\n').trim() + '\n';
@@ -725,6 +736,7 @@ export class ExtensionService {
             ['title', yamlString(courseTitle)],
             ['instructor', meta.instructor ? yamlString(meta.instructor) : null],
             ['platform', meta.platform ? yamlString(meta.platform) : null],
+        ['timing', meta.timing === 'estimated' ? yamlString(TIMING_NOTICE) : null],
             ['lectures', String(lectures.length)],
             ['saved', savedProperty()],
           ],
@@ -757,7 +769,7 @@ export class ExtensionService {
             .join('\n\n')
             .trim();
 
-          return [`## ${sectionHeadings[i]}`, section];
+          return [`## ${sectionHeadings[i]}`, ...(timingOf(lecture.transcript) === 'estimated' ? [`> ${TIMING_NOTICE}`] : []), section];
         });
 
         return [head, `# ${courseTitle}`, ...contents, ...body].join('\n\n').trim() + '\n';
@@ -784,7 +796,7 @@ export class ExtensionService {
             .join('\n\n')
             .trim();
 
-          return `${'='.repeat(48)}\n${i + 1}. ${lecture.title}\n${'='.repeat(48)}\n\n${section}`;
+          return `${'='.repeat(48)}\n${i + 1}. ${lecture.title}\n${'='.repeat(48)}\n\n${timingOf(lecture.transcript) === 'estimated' ? TIMING_NOTICE + '\n\n' : ''}${section}`;
         });
 
         return `${head}\n\n${body.join('\n\n')}\n`;
@@ -807,6 +819,7 @@ export class ExtensionService {
     if (meta.instructor) fields.push(`**Instructor:** ${meta.instructor}`);
     if (meta.url) fields.push(`**Source:** ${meta.url}`);
     fields.push(`**Saved:** ${formatSavedAt()}`);
+    if (meta.timing === 'estimated') fields.push(`**Timing:** ${TIMING_NOTICE}`);
 
     const head: string[] = [`# ${title}`, fields.join('\n')];
 
@@ -853,6 +866,7 @@ export class ExtensionService {
         ['instructor', meta.instructor ? yamlString(meta.instructor) : null],
         ['source', meta.url ? yamlString(meta.url) : null],
         ['platform', meta.platform ? yamlString(meta.platform) : null],
+        ['timing', meta.timing === 'estimated' ? yamlString(TIMING_NOTICE) : null],
         ['saved', savedProperty()],
       ],
       yamlTags(['transcript', meta.platform, meta.courseTitle]),
@@ -874,6 +888,7 @@ export class ExtensionService {
         instructor: meta.instructor ?? null,
         platform: meta.platform ?? 'unknown',
         url: meta.url ?? null,
+        timing: meta.timing ?? 'unknown',
         extractedAt: new Date().toISOString(),
         savedAt: formatSavedAt(),
         cueCount: cues.length,
@@ -896,7 +911,7 @@ export class ExtensionService {
   ): string {
     // A dated header, so a saved transcript can be told apart from a newer one.
     const header =
-      [meta.title || 'Transcript', meta.url ? `Source: ${meta.url}` : null, `Saved: ${formatSavedAt()}`]
+      [meta.title || 'Transcript', meta.url ? `Source: ${meta.url}` : null, meta.timing === 'estimated' ? TIMING_NOTICE : null, `Saved: ${formatSavedAt()}`]
         .filter((line): line is string => line !== null)
         .join('\n') + '\n\n';
 
@@ -934,6 +949,7 @@ export class ExtensionService {
           instructor: meta.instructor ?? null,
           platform: meta.platform ?? 'unknown',
           url: meta.url ?? null,
+          timing: meta.timing ?? 'unknown',
           extracted_at: new Date().toISOString(),
           saved_at: formatSavedAt(),
         },
@@ -985,7 +1001,7 @@ export class ExtensionService {
     const rows = cues.map((cue) =>
       [
         csvField(cue.startSeconds),
-        csvField(cue.startSeconds === null ? null : formatTimestamp(cue.startSeconds)),
+        csvField(cue.startSeconds === null ? null : `${meta.timing === 'estimated' ? '~' : ''}${formatTimestamp(cue.startSeconds)}`),
         csvField(cue.text),
         csvField(buildDeepLink(meta.url, cue.startSeconds)),
       ].join(','),
@@ -1014,7 +1030,7 @@ export class ExtensionService {
         csvField(card.front),
         csvField(card.back),
         csvField(
-          [meta.title, card.timestamp].filter(Boolean).join(' · ') || 'Lecture transcript',
+          [meta.title, meta.timing === 'estimated' ? `Approximate: ${card.timestamp}` : card.timestamp].filter(Boolean).join(' · ') || 'Lecture transcript',
         ),
         csvField(buildDeepLink(meta.url, card.startSeconds)),
       ].join(','),
@@ -1146,6 +1162,14 @@ export class ExtensionService {
   /**
    * Cancel an in-progress batch extraction
    */
+  static async resumeBatchExtraction(retryFailed = false): Promise<ExtensionServiceResponse<BatchState>> {
+    return this.sendMessage({ type: retryFailed ? 'RETRY_BATCH' : 'RESUME_BATCH' });
+  }
+
+  static async setBatchOptions(autoDownload: boolean): Promise<ExtensionServiceResponse<void>> {
+    return this.sendMessage({ type: 'SET_BATCH_OPTIONS', data: { autoDownload } });
+  }
+
   static async cancelBatchExtraction(): Promise<ExtensionServiceResponse<void>> {
     return this.sendMessage({
       type: 'CANCEL_BATCH_EXTRACTION',

@@ -1,3 +1,5 @@
+import { log } from './log';
+import { isPageContext } from './context';
 /**
  * The popup's view of the library.
  *
@@ -17,8 +19,8 @@
  * So there are two layers: a one-time sweep, and a per-course fallback. If the
  * library has nothing for the course being opened but the old storage does,
  * that course is read from the old storage and written into the library then
- * and there. Nothing is ever deleted from the old storage, so this can only
- * recover data, never lose it.
+ * and there. Explicit deletions also update the old storage so recovery cannot
+ * restore data the user chose to delete.
  */
 
 import {
@@ -60,6 +62,7 @@ export async function loadCourseCollection(
   url: string | undefined,
   meta: { courseTitle?: string; instructor?: string } = {},
 ): Promise<CollectedLecture[]> {
+  if (isPageContext()) return loadCollection(url);
   await ensureMigrated();
 
   const courseId = courseIdFromUrl(url);
@@ -84,7 +87,7 @@ export async function loadCourseCollection(
     for (const lecture of legacy) {
       await saveLecture(lecture, meta).catch(() => undefined);
     }
-    console.log(`[library] recovered ${records.lectures.length} lectures for ${courseId}`);
+    log.debug(`[library] recovered ${records.lectures.length} lectures for ${courseId}`);
 
     return legacy;
   } catch (error) {
@@ -108,12 +111,13 @@ export async function saveCourseLecture(
   url: string | undefined,
   meta: { courseTitle?: string; instructor?: string } = {},
 ): Promise<void> {
-  try {
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    const response = await chrome.runtime.sendMessage({ type: 'SAVE_LECTURE_TO_LIBRARY', data: { lecture, meta } });
+    if (!response?.success) throw new Error(response?.error || 'The library did not confirm this save.');
+  } else {
     await saveLecture(lecture, meta);
-  } catch (error) {
-    console.error('[library] write failed', error);
   }
-
+  // This copy supports older versions; the committed library is authoritative.
   await saveCollection(url, collection);
 }
 
@@ -121,17 +125,11 @@ export async function saveCourseLecture(
 export async function removeCourseLecture(
   lectureId: string,
   collection: CollectedLecture[],
-  url: string | undefined,
+  _url: string | undefined,
 ): Promise<CollectedLecture[]> {
   const next = removeLecture(collection, lectureId);
 
-  try {
-    await deleteLecture(lectureId);
-  } catch (error) {
-    console.error('[library] delete failed', error);
-  }
-
-  await saveCollection(url, next);
+  await deleteLecture(lectureId);
   return next;
 }
 
@@ -139,18 +137,12 @@ export async function removeCourseLecture(
 export async function removeCourseTranscript(
   lectureId: string,
   collection: CollectedLecture[],
-  url: string | undefined,
+  _url: string | undefined,
 ): Promise<CollectedLecture[]> {
   const next = collection.map((item) =>
     item.id === lectureId ? { ...item, transcript: '' } : item,
   );
 
-  try {
-    await deleteTranscript(lectureId);
-  } catch (error) {
-    console.error('[library] transcript delete failed', error);
-  }
-
-  await saveCollection(url, next);
+  await deleteTranscript(lectureId);
   return next;
 }

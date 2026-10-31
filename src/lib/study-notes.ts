@@ -14,6 +14,8 @@
  */
 
 import {
+  timingOf,
+  TIMING_NOTICE,
   anchoredIn,
   cleanCues,
   formatTimestamp,
@@ -216,6 +218,7 @@ export function buildStudyNotes(lecture: StudyLecture, options: StudyOptions = {
   const provenance = [courseTitle, instructor].filter(Boolean).join(' · ');
   if (provenance) out.push(`*${provenance}*`);
   if (lecture.url) out.push(`[Open the lecture](${lecture.url})`);
+  if (timingOf(lecture.transcript) === 'estimated') out.push(`> ${TIMING_NOTICE}`);
 
   const marked = digest(lecture);
   if (marked.length > 0) {

@@ -3,7 +3,7 @@ import { Search as SearchIcon, Loader2, ChevronRight, X } from 'lucide-react';
 import { listAllLectures, listAllTranscripts, listCourses } from '../../lib/library-db';
 import { searchService } from '../../lib/search-service';
 import { ExtensionService } from '../../lib/extension-service';
-import { buildChunks, formatTimestamp, type Chunk } from '../../lib/transcript';
+import { timingOf, buildChunks, formatTimestamp, type Chunk } from '../../lib/transcript';
 import { bestSnippet, confidenceLabel, type SearchHit } from '../../lib/semantic-search';
 
 interface SearchViewProps {
@@ -12,6 +12,7 @@ interface SearchViewProps {
 
 /** A passage, plus where in the library it came from. */
 type LibraryChunk = Chunk & {
+  estimated: boolean;
   lectureId: string;
   lectureTitle: string;
   courseTitle: string;
@@ -82,6 +83,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onOpenLecture }) => {
           for (const chunk of built) {
             merged.push({
               ...chunk,
+              estimated: timingOf(transcript.text) === 'estimated',
               chunkIndex: merged.length,
               lectureId: transcript.lectureId,
               lectureTitle,
@@ -114,8 +116,8 @@ export const SearchView: React.FC<SearchViewProps> = ({ onOpenLecture }) => {
         // progressive enhancement is for. On a machine that cannot load the
         // model, keyword search is the product.
         try {
-          await searchService.indexSemantic(payload, signature);
-          if (!cancelled) setSemanticReady(true);
+          const count = await searchService.indexSemantic(payload, signature);
+          if (!cancelled) setSemanticReady(count > 0);
         } catch (cause) {
           console.error('[search] semantic index unavailable, keywords still work', cause);
         }
@@ -179,20 +181,20 @@ export const SearchView: React.FC<SearchViewProps> = ({ onOpenLecture }) => {
    * Stays text where no URL was stored for the lecture: a button that cannot
    * work is worse than a label that never promised to.
    */
-  const HitTime: React.FC<{ seconds: number | null; url?: string }> = ({ seconds, url }) => {
+  const HitTime: React.FC<{ seconds: number | null; url?: string; estimated: boolean }> = ({ seconds, url, estimated }) => {
     const shape = 'w-12 shrink-0 pt-0.5 text-[11px] font-mono tabular-nums';
     const resting = 'text-slate-400 dark:text-slate-500';
 
     if (seconds === null) return <span className={`${shape} ${resting}`}>—</span>;
-    if (!url) return <span className={`${shape} ${resting}`}>{formatTimestamp(seconds)}</span>;
+    if (!url) return <span className={`${shape} ${resting}`}>{estimated ? '~' : ''}{formatTimestamp(seconds)}</span>;
 
     return (
       <button
         onClick={() => void jumpTo(url, seconds)}
-        title="Play the lecture from here"
+        title={estimated ? "Approximate timestamp — play near this moment" : "Play the lecture from here"}
         className={`${shape} ${resting} text-left hover:text-blue-600 hover:underline dark:hover:text-blue-400 transition-colors`}
       >
-        {formatTimestamp(seconds)}
+        {estimated ? '~' : ''}{formatTimestamp(seconds)}
       </button>
     );
   };
@@ -288,7 +290,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onOpenLecture }) => {
                 key={hit.chunkIndex}
                 className="group flex gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 hover:border-blue-300 dark:hover:border-blue-800 transition-colors"
               >
-                <HitTime seconds={chunk.startSeconds} url={chunk.lectureUrl} />
+                <HitTime estimated={chunk.estimated} seconds={chunk.startSeconds} url={chunk.lectureUrl} />
 
                 <button
                   onClick={() => onOpenLecture(chunk.lectureId)}

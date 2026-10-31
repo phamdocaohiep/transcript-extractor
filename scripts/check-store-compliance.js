@@ -14,6 +14,7 @@
  */
 
 import fs from 'fs';
+import vm from 'node:vm';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -108,15 +109,17 @@ const contentScriptFiles = new Set(
 );
 // The popup also injects this on demand for sites outside the declared matches.
 contentScriptFiles.add('content-script.js');
+contentScriptFiles.add('background.js');
 
 for (const name of contentScriptFiles) {
   const file = path.join(DIST, name);
   if (!fs.existsSync(file)) continue;
   const source = fs.readFileSync(file, 'utf8');
-  if (/(^|[;\n])\s*(import|export)[\s{(*]/.test(source)) {
-    fail(
-      `${name} contains ESM syntax. Content scripts run as classic scripts and will fail to load.`,
-    );
+  try {
+    // Parse without executing. Regex scanning also matched words inside quoted strings.
+    new vm.Script(source, { filename: name });
+  } catch (error) {
+    fail(`${name} is not valid classic JavaScript (ESM syntax or another syntax error): ${error.message}`);
   }
 }
 if (!failures.some((f) => f.includes('ESM syntax'))) {
@@ -128,6 +131,8 @@ if (!failures.some((f) => f.includes('ESM syntax'))) {
 const REQUIRED = [
   'manifest.json',
   'content-script.js',
+  'background.js',
+  'dashboard.html',
   'index.html',
   'models/search/embeddings.bin',
   'models/search/vocab.json',
@@ -138,7 +143,9 @@ for (const required of REQUIRED) {
     fail(`Missing bundled asset: ${required}. It would have to be fetched at runtime.`);
   }
 }
-pass(`All ${REQUIRED.length} required assets are bundled.`);
+if (REQUIRED.every(file => fs.existsSync(path.join(DIST, file)))) {
+  pass(`All ${REQUIRED.length} required assets are bundled.`);
+}
 
 /* 4. Manifest ---------------------------------------------------------------- */
 
@@ -175,7 +182,7 @@ if (!csp.includes("script-src 'self'")) {
 
 for (const host of manifest.host_permissions ?? []) {
   if (host === '<all_urls>' || host === '*://*/*') {
-    warn(`Broad host permission "${host}" invites extra review. activeTab covers most cases.`);
+    fail(`Broad host permission "${host}" is outside the supported permission policy.`);
   }
 }
 if (!(manifest.host_permissions ?? []).some((h) => h === '<all_urls>' || h === '*://*/*')) {

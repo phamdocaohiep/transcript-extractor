@@ -1,0 +1,11 @@
+{
+  "name": "transcript-extractor",
+  "kind": "extension",
+  "manager": "npm",
+  "port": 5173,
+  "caches": [
+    "dist",
+    ".vite",
+    "coverage"
+  ]
+}

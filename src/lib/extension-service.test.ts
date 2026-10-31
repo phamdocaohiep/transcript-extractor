@@ -466,3 +466,17 @@ describe('formatTranscript', () => {
     expect(JSON.parse(ExtensionService.formatTranscript('', 'rag', true, 'T')).chunks).toEqual([]);
   });
 });
+
+describe('estimated timestamp exports', () => {
+  const raw = '<!-- timing: estimated -->\n\n[00:10] Example caption.';
+  it('discloses estimation in readable and machine-readable formats', () => {
+    expect(ExtensionService.formatTranscript(raw, 'markdown')).toContain('Timestamps are approximate');
+    expect(ExtensionService.formatTranscript(raw, 'txt')).toContain('Timestamps are approximate');
+    expect(JSON.parse(ExtensionService.formatTranscript(raw, 'json')).timing).toBe('estimated');
+    expect(ExtensionService.formatTranscript(raw, 'csv')).toContain('~00:10');
+  });
+  it('does not turn estimated times into apparently precise subtitle files', () => {
+    expect(() => ExtensionService.formatTranscript(raw, 'srt')).toThrow('source timestamps');
+    expect(() => ExtensionService.formatTranscript(raw, 'vtt')).toThrow('source timestamps');
+  });
+});

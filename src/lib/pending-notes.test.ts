@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   PENDING_NOTES_KEY,
   queueNote,
-  takePendingNotes,
+  readPendingNotes,
+  acknowledgeNote,
   validPendingNotes,
   type PendingNote,
 } from './pending-notes';
@@ -63,7 +64,7 @@ describe('the queue', () => {
     (globalThis as { chrome?: unknown }).chrome = {
       storage: {
         local: {
-          get: async (key: string) => ({ [key]: store[key] }),
+          get: async (key: string | null) => key === null ? { ...store } : ({ [key]: store[key] }),
           set: async (patch: Record<string, unknown>) => void Object.assign(store, patch),
           remove: async (key: string) => void delete store[key],
         },
@@ -81,19 +82,20 @@ describe('the queue', () => {
     expect(await queueNote(NOTE)).toBe(true);
     expect(await queueNote({ ...NOTE, id: 'note:2', body: 'and again' })).toBe(true);
 
-    expect(validPendingNotes(store[PENDING_NOTES_KEY])).toHaveLength(2);
+    expect(await readPendingNotes()).toHaveLength(2);
   });
 
-  it('hands over everything queued and clears it', async () => {
+  it('retains notes until their committed writes are acknowledged', async () => {
     await queueNote(NOTE);
 
-    expect((await takePendingNotes()).map((note) => note.id)).toEqual(['note:1']);
-    // Taken twice would import the same note twice.
-    expect(await takePendingNotes()).toEqual([]);
+    expect((await readPendingNotes()).map((note) => note.id)).toEqual(['note:1']);
+    expect(await readPendingNotes()).toHaveLength(1);
+    await acknowledgeNote(NOTE.id);
+    expect(await readPendingNotes()).toEqual([]);
   });
 
   it('leaves the queue alone when there was nothing in it', async () => {
-    expect(await takePendingNotes()).toEqual([]);
+    expect(await readPendingNotes()).toEqual([]);
     expect(store[PENDING_NOTES_KEY]).toBeUndefined();
   });
 
@@ -119,6 +121,22 @@ describe('the queue', () => {
     delete (globalThis as { chrome?: unknown }).chrome;
 
     expect(await queueNote(NOTE)).toBe(false);
-    expect(await takePendingNotes()).toEqual([]);
+    expect(await readPendingNotes()).toEqual([]);
+  });
+});
+
+describe('concurrent note producers', () => {
+  afterEach(() => delete (globalThis as { chrome?: unknown }).chrome);
+  it('keeps simultaneous writes from different tabs and legacy queued notes', async () => {
+    const store: Record<string, unknown> = { [PENDING_NOTES_KEY]: [{ ...NOTE, id: 'legacy' }] };
+    (globalThis as { chrome?: unknown }).chrome = { storage: { local: {
+      get: async (key: string | null) => key === null ? { ...store } : { [key]: store[key] },
+      set: async (patch: Record<string, unknown>) => { Object.assign(store, patch); },
+      remove: async (key: string) => { delete store[key]; },
+    } } };
+    await Promise.all([queueNote(NOTE), queueNote({ ...NOTE, id: 'second' })]);
+    expect(await readPendingNotes()).toHaveLength(3);
+    await acknowledgeNote(NOTE.id);
+    expect((await readPendingNotes()).map(note => note.id)).toEqual(['legacy', 'second']);
   });
 });

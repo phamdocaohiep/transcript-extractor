@@ -1,7 +1,8 @@
+import { log } from './log';
 // Udemy Transcript Extractor
 // Based on the provided HTML structure from Udemy course pages
 
-import { estimateCueTimings, orderCollectedCues } from './transcript';
+import { ESTIMATED_TIMING_MARKER, estimateCueTimings, orderCollectedCues } from './transcript';
 
 export interface UdemySection {
   id: string;
@@ -67,7 +68,7 @@ export class UdemyExtractor {
       );
       if (collapsedTogglers.length === 0) return;
 
-      console.log(`🎯 Expanding ${collapsedTogglers.length} collapsed sections...`);
+      log.debug(`🎯 Expanding ${collapsedTogglers.length} collapsed sections...`);
       for (const btn of collapsedTogglers) {
         (btn as HTMLElement).click();
         await new Promise((r) => setTimeout(r, 60));
@@ -108,12 +109,12 @@ export class UdemyExtractor {
     const sections: UdemySection[] = [];
     let sectionElements = document.querySelectorAll(SELECTORS.SIDEBAR_SECTIONS);
     
-    console.log('🎯 Course structure debug - Found section elements:', sectionElements.length);
-    console.log('🎯 Course structure debug - Section selector used:', SELECTORS.SIDEBAR_SECTIONS);
+    log.debug('🎯 Course structure debug - Found section elements:', sectionElements.length);
+    log.debug('🎯 Course structure debug - Section selector used:', SELECTORS.SIDEBAR_SECTIONS);
 
     // If no sections found with current selector, try alternative selectors
     if (sectionElements.length === 0) {
-      console.log('🎯 Course structure debug - No sections found, trying alternative selectors...');
+      log.debug('🎯 Course structure debug - No sections found, trying alternative selectors...');
       const alternativeSelectors = [
         '[data-purpose="curriculum-section"]',
         '.ud-accordion-panel',
@@ -123,7 +124,7 @@ export class UdemyExtractor {
 
       for (const selector of alternativeSelectors) {
         const altElements = document.querySelectorAll(selector);
-        console.log(`🎯 Course structure debug - Alternative selector "${selector}": ${altElements.length} elements`);
+        log.debug(`🎯 Course structure debug - Alternative selector "${selector}": ${altElements.length} elements`);
         if (altElements.length > 0) {
           sectionElements = altElements;
           break;
@@ -136,7 +137,7 @@ export class UdemyExtractor {
       const duration = this.extractSectionDuration(sectionEl);
       const lectures = this.extractLectures(sectionEl);
 
-      console.log(`🎯 Course structure debug - Section ${index}:`, { 
+      log.debug(`🎯 Course structure debug - Section ${index}:`, {
         title, 
         duration, 
         lectureCount: lectures.length,
@@ -151,7 +152,7 @@ export class UdemyExtractor {
       });
     });
 
-    console.log('🎯 Course structure debug - Total sections extracted:', sections.length);
+    log.debug('🎯 Course structure debug - Total sections extracted:', sections.length);
     return sections;
   }
 
@@ -202,7 +203,7 @@ export class UdemyExtractor {
       }
     }
 
-    console.log(`🎯 Course structure debug - Section lectures found:`, {
+    log.debug(`🎯 Course structure debug - Section lectures found:`, {
       sectionTitle: this.extractSectionTitle(sectionEl),
       lectureCount: lectureElements?.length || 0,
       usedSelector: usedSelector
@@ -246,7 +247,7 @@ export class UdemyExtractor {
 
     if (!lectureElements || lectureElements.length === 0) {
       const allLinks = sectionEl.querySelectorAll('a[href*="/learn/lecture/"], [data-purpose*="curriculum-item"]');
-      console.log(`🎯 Course structure debug - Fallback: found ${allLinks.length} lecture links`);
+      log.debug(`🎯 Course structure debug - Fallback: found ${allLinks.length} lecture links`);
 
       allLinks.forEach((linkEl, index) => {
         const title = linkEl.textContent?.trim() || 'Untitled Lecture';
@@ -358,7 +359,7 @@ export class UdemyExtractor {
    * Test course structure selectors specifically
    */
   static testCourseStructureSelectors(): void {
-    console.log('🎯 === COURSE STRUCTURE SELECTORS TEST ===');
+    log.debug('🎯 === COURSE STRUCTURE SELECTORS TEST ===');
     
     // Test section selectors
     const sectionSelectors = [
@@ -369,13 +370,13 @@ export class UdemyExtractor {
       '[data-purpose*="section"]'
     ];
 
-    console.log('🎯 Section Selectors Test:');
+    log.debug('🎯 Section Selectors Test:');
     sectionSelectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`  ${selector}: ${elements.length} elements found`);
+      log.debug(`  ${selector}: ${elements.length} elements found`);
       if (elements.length > 0) {
-        console.log(`    First element classes: "${elements[0].className}"`);
-        console.log(`    First element text: "${elements[0].textContent?.substring(0, 100)}..."`);
+        log.debug(`    First element classes: "${elements[0].className}"`);
+        log.debug(`    First element text: "${elements[0].textContent?.substring(0, 100)}..."`);
       }
     });
 
@@ -388,13 +389,13 @@ export class UdemyExtractor {
       'a[href*="/learn/lecture/"]'
     ];
 
-    console.log('🎯 Lecture Selectors Test:');
+    log.debug('🎯 Lecture Selectors Test:');
     lectureSelectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`  ${selector}: ${elements.length} elements found`);
+      log.debug(`  ${selector}: ${elements.length} elements found`);
       if (elements.length > 0) {
-        console.log(`    First element classes: "${elements[0].className}"`);
-        console.log(`    First element text: "${elements[0].textContent?.substring(0, 100)}..."`);
+        log.debug(`    First element classes: "${elements[0].className}"`);
+        log.debug(`    First element text: "${elements[0].textContent?.substring(0, 100)}..."`);
       }
     });
 
@@ -407,24 +408,24 @@ export class UdemyExtractor {
       '.ud-text-sm'
     ];
 
-    console.log('🎯 Title Selectors Test:');
+    log.debug('🎯 Title Selectors Test:');
     titleSelectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`  ${selector}: ${elements.length} elements found`);
+      log.debug(`  ${selector}: ${elements.length} elements found`);
       if (elements.length > 0) {
-        console.log(`    First element text: "${elements[0].textContent?.trim()}"`);
+        log.debug(`    First element text: "${elements[0].textContent?.trim()}"`);
       }
     });
 
     // Test all links that might be lectures
     const allLectureLinks = document.querySelectorAll('a[href*="/learn/lecture/"]');
-    console.log(`🎯 All lecture links found: ${allLectureLinks.length}`);
+    log.debug(`🎯 All lecture links found: ${allLectureLinks.length}`);
     if (allLectureLinks.length > 0) {
-      console.log('  Sample lecture links:');
+      log.debug('  Sample lecture links:');
       const sampleCount = Math.min(5, allLectureLinks.length);
       for (let i = 0; i < sampleCount; i++) {
         const link = allLectureLinks[i];
-        console.log(`    ${i + 1}. "${link.textContent?.trim()}" (${link.getAttribute('href')})`);
+        log.debug(`    ${i + 1}. "${link.textContent?.trim()}" (${link.getAttribute('href')})`);
       }
     }
   }
@@ -433,7 +434,7 @@ export class UdemyExtractor {
    * Test all selectors to find the most reliable ones
    */
   static testAllSelectors(): void {
-    console.log('🎯 === COMPREHENSIVE SELECTOR TESTING STARTED ===');
+    log.debug('🎯 === COMPREHENSIVE SELECTOR TESTING STARTED ===');
     
     // Test transcript panel selectors
     const panelSelectors = [
@@ -447,16 +448,16 @@ export class UdemyExtractor {
       '[class*="subtitles"]'
     ];
     
-    console.log('🎯 === PANEL SELECTORS TEST ===');
+    log.debug('🎯 === PANEL SELECTORS TEST ===');
     panelSelectors.forEach(selector => {
       const element = document.querySelector(selector);
-      console.log(`  ${selector}: ${element ? '✅ FOUND' : '❌ NOT FOUND'}`);
+      log.debug(`  ${selector}: ${element ? '✅ FOUND' : '❌ NOT FOUND'}`);
       if (element) {
-        console.log(`    Text content: "${element.textContent?.substring(0, 100)}..."`);
-        console.log(`    Children count: ${element.children.length}`);
-        console.log(`    Classes: "${element.className}"`);
-        console.log(`    Visible: ${(element as HTMLElement).offsetParent !== null}`);
-        console.log(`    Dimensions: ${(element as HTMLElement).offsetWidth}x${(element as HTMLElement).offsetHeight}`);
+        log.debug(`    Text content: "${element.textContent?.substring(0, 100)}..."`);
+        log.debug(`    Children count: ${element.children.length}`);
+        log.debug(`    Classes: "${element.className}"`);
+        log.debug(`    Visible: ${(element as HTMLElement).offsetParent !== null}`);
+        log.debug(`    Dimensions: ${(element as HTMLElement).offsetWidth}x${(element as HTMLElement).offsetHeight}`);
       }
     });
     
@@ -476,21 +477,21 @@ export class UdemyExtractor {
       '[class*="timestamp"]'
     ];
     
-    console.log('🎯 === ENTRY SELECTORS TEST ===');
+    log.debug('🎯 === ENTRY SELECTORS TEST ===');
     entrySelectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`  ${selector}: ${elements.length} elements found`);
+      log.debug(`  ${selector}: ${elements.length} elements found`);
       if (elements.length > 0) {
-        console.log(`    First element text: "${elements[0].textContent?.substring(0, 50)}..."`);
-        console.log(`    First element classes: "${elements[0].className}"`);
-        console.log(`    First element tag: "${elements[0].tagName}"`);
+        log.debug(`    First element text: "${elements[0].textContent?.substring(0, 50)}..."`);
+        log.debug(`    First element classes: "${elements[0].className}"`);
+        log.debug(`    First element tag: "${elements[0].tagName}"`);
         
         // Show sample of first few elements
         const sampleCount = Math.min(3, elements.length);
         for (let i = 0; i < sampleCount; i++) {
           const text = elements[i].textContent?.trim();
           if (text) {
-            console.log(`    Sample ${i + 1}: "${text.substring(0, 80)}..."`);
+            log.debug(`    Sample ${i + 1}: "${text.substring(0, 80)}..."`);
           }
         }
       }
@@ -509,24 +510,24 @@ export class UdemyExtractor {
       'button[aria-label*="subtitles" i]'
     ];
     
-    console.log('🎯 === BUTTON SELECTORS TEST ===');
+    log.debug('🎯 === BUTTON SELECTORS TEST ===');
     buttonSelectors.forEach(selector => {
       const element = document.querySelector(selector);
-      console.log(`  ${selector}: ${element ? '✅ FOUND' : '❌ NOT FOUND'}`);
+      log.debug(`  ${selector}: ${element ? '✅ FOUND' : '❌ NOT FOUND'}`);
       if (element) {
-        console.log(`    Button text: "${element.textContent?.trim()}"`);
-        console.log(`    Button classes: "${element.className}"`);
-        console.log(`    Button visible: ${(element as HTMLElement).offsetParent !== null}`);
-        console.log(`    Button disabled: ${(element as HTMLButtonElement).disabled}`);
-        console.log(`    Aria-label: "${element.getAttribute('aria-label')}"`);
-        console.log(`    Data-purpose: "${element.getAttribute('data-purpose')}"`);
+        log.debug(`    Button text: "${element.textContent?.trim()}"`);
+        log.debug(`    Button classes: "${element.className}"`);
+        log.debug(`    Button visible: ${(element as HTMLElement).offsetParent !== null}`);
+        log.debug(`    Button disabled: ${(element as HTMLButtonElement).disabled}`);
+        log.debug(`    Aria-label: "${element.getAttribute('aria-label')}"`);
+        log.debug(`    Data-purpose: "${element.getAttribute('data-purpose')}"`);
       }
     });
     
     // Test all buttons on page for transcript-related content
-    console.log('🎯 === ALL BUTTONS ANALYSIS ===');
+    log.debug('🎯 === ALL BUTTONS ANALYSIS ===');
     const allButtons = document.querySelectorAll('button');
-    console.log(`  Total buttons found: ${allButtons.length}`);
+    log.debug(`  Total buttons found: ${allButtons.length}`);
     
     const transcriptButtons = Array.from(allButtons).filter(btn => {
       const text = btn.textContent?.toLowerCase() || '';
@@ -540,44 +541,44 @@ export class UdemyExtractor {
              className.includes('transcript') || className.includes('captions') || className.includes('subtitles');
     });
     
-    console.log(`  Transcript-related buttons found: ${transcriptButtons.length}`);
+    log.debug(`  Transcript-related buttons found: ${transcriptButtons.length}`);
     transcriptButtons.forEach((btn, i) => {
-      console.log(`    Button ${i + 1}:`);
-      console.log(`      Text: "${btn.textContent?.trim()}"`);
-      console.log(`      Aria-label: "${btn.getAttribute('aria-label')}"`);
-      console.log(`      Data-purpose: "${btn.getAttribute('data-purpose')}"`);
-      console.log(`      Classes: "${btn.className}"`);
-      console.log(`      Visible: ${(btn as HTMLElement).offsetParent !== null}`);
-      console.log(`      Disabled: ${btn.disabled}`);
+      log.debug(`    Button ${i + 1}:`);
+      log.debug(`      Text: "${btn.textContent?.trim()}"`);
+      log.debug(`      Aria-label: "${btn.getAttribute('aria-label')}"`);
+      log.debug(`      Data-purpose: "${btn.getAttribute('data-purpose')}"`);
+      log.debug(`      Classes: "${btn.className}"`);
+      log.debug(`      Visible: ${(btn as HTMLElement).offsetParent !== null}`);
+      log.debug(`      Disabled: ${btn.disabled}`);
     });
     
     // Test video element and text tracks
-    console.log('🎯 === VIDEO ELEMENT TEST ===');
+    log.debug('🎯 === VIDEO ELEMENT TEST ===');
     const video = document.querySelector('video');
     if (video) {
-      console.log(`  Video element found: ${video.tagName}`);
-      console.log(`  Video src: "${video.src}"`);
-      console.log(`  Video currentTime: ${video.currentTime}`);
-      console.log(`  Video duration: ${video.duration}`);
+      log.debug(`  Video element found: ${video.tagName}`);
+      log.debug(`  Video src: "${video.src}"`);
+      log.debug(`  Video currentTime: ${video.currentTime}`);
+      log.debug(`  Video duration: ${video.duration}`);
       
       const tracks = Array.from(video.textTracks || []);
-      console.log(`  Text tracks found: ${tracks.length}`);
+      log.debug(`  Text tracks found: ${tracks.length}`);
       tracks.forEach((track, i) => {
-        console.log(`    Track ${i + 1}:`);
-        console.log(`      Kind: "${track.kind}"`);
-        console.log(`      Label: "${track.label}"`);
-        console.log(`      Language: "${track.language}"`);
-        console.log(`      Mode: "${track.mode}"`);
-        console.log(`      Cues count: ${track.cues?.length || 0}`);
+        log.debug(`    Track ${i + 1}:`);
+        log.debug(`      Kind: "${track.kind}"`);
+        log.debug(`      Label: "${track.label}"`);
+        log.debug(`      Language: "${track.language}"`);
+        log.debug(`      Mode: "${track.mode}"`);
+        log.debug(`      Cues count: ${track.cues?.length || 0}`);
       });
     } else {
-      console.log('  No video element found');
+      log.debug('  No video element found');
     }
     
     // Test for any transcript-related elements by class name
-    console.log('🎯 === TRANSCRIPT-RELATED ELEMENTS BY CLASS ===');
+    log.debug('🎯 === TRANSCRIPT-RELATED ELEMENTS BY CLASS ===');
     const transcriptElements = document.querySelectorAll('[class*="transcript"], [class*="captions"], [class*="subtitles"], [class*="cc"]');
-    console.log(`  Total transcript-related elements: ${transcriptElements.length}`);
+    log.debug(`  Total transcript-related elements: ${transcriptElements.length}`);
     
     const classGroups: { [key: string]: Element[] } = {};
           transcriptElements.forEach(el => {
@@ -595,16 +596,16 @@ export class UdemyExtractor {
       });
     
     Object.entries(classGroups).forEach(([className, elements]) => {
-      console.log(`    Class "${className}": ${elements.length} elements`);
+      log.debug(`    Class "${className}": ${elements.length} elements`);
       if (elements.length <= 3) {
         elements.forEach((el, i) => {
           const text = el.textContent?.trim().substring(0, 50);
-          console.log(`      Element ${i + 1}: "${text}..."`);
+          log.debug(`      Element ${i + 1}: "${text}..."`);
         });
       }
     });
     
-    console.log('🎯 === SELECTOR TESTING COMPLETED ===');
+    log.debug('🎯 === SELECTOR TESTING COMPLETED ===');
   }
 
   /**
@@ -613,7 +614,7 @@ export class UdemyExtractor {
    */
   static async extractTranscript(): Promise<string> {
     try {
-      console.log('🎯 Starting transcript extraction...');
+      log.debug('🎯 Starting transcript extraction...');
       
       // Wait for video to be ready dynamically
       const video = await this.waitForVideoReady(3000);
@@ -625,7 +626,7 @@ export class UdemyExtractor {
       if (video.textTracks && video.textTracks.length > 0) {
         const trackLines = await this.extractFromTextTracks();
         if (trackLines.length >= 20) {
-          console.log(`🎯 Fast path: Extracted ${trackLines.length} cues from text tracks.`);
+          log.debug(`🎯 Fast path: Extracted ${trackLines.length} cues from text tracks.`);
           return trackLines.join('\n\n');
         }
       }
@@ -639,7 +640,6 @@ export class UdemyExtractor {
         const hoverEvent = new MouseEvent('mousemove', {
           bubbles: true,
           cancelable: true,
-          view: window,
           clientX: 400,
           clientY: 300
         });
@@ -648,13 +648,13 @@ export class UdemyExtractor {
       }
       
       // Ensure transcript is active with dynamic timing
-      console.log('🎯 Ensuring transcript is active...');
+      log.debug('🎯 Ensuring transcript is active...');
       await this.ensureTranscriptActive();
       
       let transcriptParts: string[] = [];
       
       // Method 1: Try transcript panel first (fastest)
-      console.log('🎯 Method 1: Trying transcript panel...');
+      log.debug('🎯 Method 1: Trying transcript panel...');
 
       // Udemy renames its generated class names between builds, so match on
       // several shapes rather than one. A single hardcoded selector silently
@@ -692,7 +692,7 @@ export class UdemyExtractor {
             if (entries.length > 0) {
               transcriptPanel = candidate;
               transcriptEntries = entries;
-              console.log(
+              log.debug(
                 `🎯 Transcript panel matched: ${panelSelector} (cues via ${entrySelector})`,
               );
               break;
@@ -704,14 +704,14 @@ export class UdemyExtractor {
       }
 
       if (!transcriptPanel) {
-        console.log('🎯 No transcript panel with cue elements found in the DOM.');
+        log.debug('🎯 No transcript panel with cue elements found in the DOM.');
       }
 
       let panelCueCount = 0;
 
       if (transcriptPanel) {
         panelCueCount = transcriptEntries?.length ?? 0;
-        console.log('🎯 Cue elements visible in the panel:', panelCueCount);
+        log.debug('🎯 Cue elements visible in the panel:', panelCueCount);
 
         if (transcriptEntries && transcriptEntries.length > 0) {
           // The panel is virtualised: only the cues near the current scroll
@@ -730,10 +730,10 @@ export class UdemyExtractor {
       // at once, so whichever source yields more wins.
       const panelCount = transcriptParts.length;
       if (panelCount < 40) {
-        console.log(`🎯 Method 2: panel gave ${panelCount} cues, trying HTML5 text tracks...`);
+        log.debug(`🎯 Method 2: panel gave ${panelCount} cues, trying HTML5 text tracks...`);
         const trackLines = await this.extractFromTextTracks();
         if (trackLines.length > panelCount) {
-          console.log(`🎯 Text tracks gave ${trackLines.length} cues; using those.`);
+          log.debug(`🎯 Text tracks gave ${trackLines.length} cues; using those.`);
           transcriptParts = trackLines;
         }
       }
@@ -774,15 +774,16 @@ export class UdemyExtractor {
           transcriptParts = estimated.map(
             (cue) => `[${this.formatTime(cue.startSeconds ?? 0)}] ${cue.text}`,
           );
-          console.log(
+          transcriptParts.unshift(ESTIMATED_TIMING_MARKER);
+          log.debug(
             `🎯 No timings in the DOM; estimated from ${Math.round(duration)}s of video.`,
           );
         } else {
-          console.log('🎯 No timings available, and no video duration to estimate from.');
+          log.debug('🎯 No timings available, and no video duration to estimate from.');
         }
       }
 
-      console.log('🎯 Transcript extraction completed:', transcriptParts.length, 'parts');
+      log.debug('🎯 Transcript extraction completed:', transcriptParts.length, 'parts');
       return transcriptParts.join('\n\n');
     } catch (error) {
       console.error('Error extracting transcript:', error);
@@ -894,7 +895,7 @@ export class UdemyExtractor {
     }
 
     const timed = collected.filter((cue) => cue.seconds !== null).length;
-    console.log(
+    log.debug(
       `🎯 Collected ${collected.length} cues from the transcript panel (${timed} with timestamps).`,
     );
 
@@ -971,13 +972,13 @@ export class UdemyExtractor {
     try {
       const video = document.querySelector('video') as HTMLVideoElement | null;
       if (!video || !video.textTracks) {
-        console.log('🎯 No video element or textTracks found');
+        log.debug('🎯 No video element or textTracks found');
         return lines;
       }
 
       const tracks = Array.from(video.textTracks);
       if (!tracks.length) {
-        console.log('🎯 No text tracks available');
+        log.debug('🎯 No text tracks available');
         return lines;
       }
 
@@ -1010,7 +1011,7 @@ export class UdemyExtractor {
             if (text && text.length > 3) current.push(`[${start}] ${text}`);
           });
 
-          console.log(`🎯 Track "${track.label || track.language}": ${current.length} cues`);
+          log.debug(`🎯 Track "${track.label || track.language}": ${current.length} cues`);
           if (current.length > best.length) best = current;
         } finally {
           // Put the user's caption setting back exactly as we found it.
@@ -1019,10 +1020,10 @@ export class UdemyExtractor {
       }
 
       lines.push(...best);
-      console.log('🎯 Extracted', lines.length, 'lines from text tracks');
+      log.debug('🎯 Extracted', lines.length, 'lines from text tracks');
 
     } catch (err) {
-      console.log('🎯 Text tracks extraction failed:', err);
+      log.debug('🎯 Text tracks extraction failed:', err);
     }
     return lines;
   }
@@ -1032,7 +1033,7 @@ export class UdemyExtractor {
    * Optimized version with reduced delays and better error handling
    */
   private static async ensureTranscriptActive(): Promise<void> {
-    console.log('🎯 Ensuring transcript/captions are active...');
+    log.debug('🎯 Ensuring transcript/captions are active...');
     
     // Check if transcript panel is already visible and has content
     const panelSelectors = [
@@ -1048,7 +1049,7 @@ export class UdemyExtractor {
           '[data-purpose="transcript-cue"], [class*="cue-container"], .transcript-cue'
         );
         if (hasCue) {
-          console.log('🎯 Transcript panel already active with content');
+          log.debug('🎯 Transcript panel already active with content');
           return;
         }
       }
@@ -1064,7 +1065,6 @@ export class UdemyExtractor {
       const hoverEvent = new MouseEvent('mousemove', {
         bubbles: true,
         cancelable: true,
-        view: window,
         clientX: 400,
         clientY: 300
       });
@@ -1076,7 +1076,7 @@ export class UdemyExtractor {
     const transcriptButton = await this.waitForTranscriptButton(1500);
     
     if (transcriptButton) {
-      console.log('🎯 Clicking transcript button...');
+      log.debug('🎯 Clicking transcript button...');
       
       // Simple click without excessive event simulation
       transcriptButton.click();
@@ -1084,15 +1084,15 @@ export class UdemyExtractor {
       // Wait for panel to appear dynamically
       const panelReady = await this.waitForTranscriptElements(1000);
       if (panelReady) {
-        console.log('🎯 Transcript panel opened successfully');
+        log.debug('🎯 Transcript panel opened successfully');
         return;
       }
       
       // Try enabling captions if transcript panel didn't work
-      console.log('🎯 Trying captions activation...');
+      log.debug('🎯 Trying captions activation...');
       await this.enableCaptions();
     } else {
-      console.log('🎯 No transcript button found, trying direct captions activation...');
+      log.debug('🎯 No transcript button found, trying direct captions activation...');
       await this.enableCaptions();
     }
   }
@@ -1104,7 +1104,7 @@ export class UdemyExtractor {
     // Method 1: Try captions dropdown with dynamic timing
     const captionsDropdown = await this.waitForElement('[data-purpose="captions-dropdown-button"]', 1000);
     if (captionsDropdown) {
-      console.log('🎯 Trying captions dropdown...');
+      log.debug('🎯 Trying captions dropdown...');
       (captionsDropdown as HTMLElement).click();
       
       // Wait for dropdown to open dynamically
@@ -1114,7 +1114,7 @@ export class UdemyExtractor {
       const englishButton = await this.waitForElement('button[aria-label*="English"], button:has-text("English")', 500);
       if (englishButton) {
         (englishButton as HTMLElement).click();
-        console.log('🎯 English captions activated');
+        log.debug('🎯 English captions activated');
         return;
       }
     }
@@ -1122,12 +1122,12 @@ export class UdemyExtractor {
     // Method 2: Try video text tracks directly
     const video = document.querySelector('video') as HTMLVideoElement;
     if (video && video.textTracks) {
-      console.log('🎯 Trying video text tracks...');
+      log.debug('🎯 Trying video text tracks...');
       for (let i = 0; i < video.textTracks.length; i++) {
         const track = video.textTracks[i];
         if (track.language === 'en' || track.label.includes('English')) {
           track.mode = 'showing';
-          console.log('🎯 Text track enabled:', track.label);
+          log.debug('🎯 Text track enabled:', track.label);
           return;
         }
       }
@@ -1215,58 +1215,32 @@ export class UdemyExtractor {
   /**
    * Wait for transcript elements to be available with dynamic timing
    */
-  private static async waitForTranscriptElements(timeout: number = 2000): Promise<boolean> {
-    return new Promise((resolve) => {
-      const checkElements = () => {
-        const hasPanel = document.querySelector('[data-purpose="transcript-panel"]');
-        const hasCues = document.querySelector('[data-purpose="transcript-cue"]');
-        const video = document.querySelector('video') as HTMLVideoElement;
-        const hasTextTracks = video && video.textTracks && video.textTracks.length > 0;
-        
-        if (hasPanel || hasCues || hasTextTracks) {
-          resolve(true);
-          return;
-        }
-        setTimeout(checkElements, 50); // Check every 50ms
-      };
-
-      checkElements();
-
-      setTimeout(() => {
-        resolve(false);
-      }, timeout);
-    });
+  private static async waitForTranscriptElements(timeout = 2000): Promise<boolean> {
+    const deadline = Date.now() + timeout;
+    do {
+      const video = document.querySelector('video');
+      if (document.querySelector('[data-purpose="transcript-panel"], [data-purpose="transcript-cue"]') ||
+          (video?.textTracks.length ?? 0) > 0) return true;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    return false;
   }
 
   /**
    * Wait for transcript button to be clickable with dynamic timing
    */
-  private static async waitForTranscriptButton(timeout: number = 1500): Promise<HTMLElement | null> {
-    return new Promise((resolve) => {
-      const checkButton = () => {
-        const buttonSelectors = [
-          'button[data-purpose="transcript-toggle"]',
-          '[data-purpose="transcript-toggle"]',
-          'button[aria-label*="transcript" i]',
-          'button[aria-label*="captions" i]'
-        ];
-        
-        for (const selector of buttonSelectors) {
-          const button = document.querySelector(selector) as HTMLElement;
-          if (button && button.offsetParent !== null && !(button as HTMLButtonElement).disabled) {
-            resolve(button);
-            return;
-          }
-        }
-        setTimeout(checkButton, 50); // Check every 50ms
-      };
-
-      checkButton();
-
-      setTimeout(() => {
-        resolve(null);
-      }, timeout);
-    });
+  private static async waitForTranscriptButton(timeout = 1500): Promise<HTMLElement | null> {
+    const deadline = Date.now() + timeout;
+    const selectors = ['button[data-purpose="transcript-toggle"]', '[data-purpose="transcript-toggle"]',
+      'button[aria-label*="transcript" i]', 'button[aria-label*="captions" i]'];
+    do {
+      for (const selector of selectors) {
+        const button = document.querySelector<HTMLElement>(selector);
+        if (button && button.offsetParent !== null && !(button as HTMLButtonElement).disabled) return button;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    return null;
   }
 
   /**
@@ -1298,7 +1272,7 @@ export class UdemyExtractor {
     const isCourse = window.location.pathname.includes('/course/');
     const result = isUdemy && isCourse;
     
-    console.log('UdemyExtractor.isUdemyCoursePage:', {
+    log.debug('UdemyExtractor.isUdemyCoursePage:', {
       hostname: window.location.hostname,
       pathname: window.location.pathname,
       isUdemy,
@@ -1328,12 +1302,12 @@ export class UdemyExtractor {
    * Improved version that works regardless of transcript panel state
    */
   static isTranscriptAvailable(): boolean {
-    console.log('🎯 Checking transcript availability...');
+    log.debug('🎯 Checking transcript availability...');
     
     // Method 1: Check for existing transcript content (already visible)
     const existingContent = document.querySelector('[data-purpose="transcript-cue"]');
     if (existingContent) {
-      console.log('🎯 Transcript content already visible');
+      log.debug('🎯 Transcript content already visible');
       return true;
     }
     
@@ -1341,11 +1315,11 @@ export class UdemyExtractor {
     const video = document.querySelector('video') as HTMLVideoElement | null;
     if (video && video.textTracks) {
       const tracks = Array.from(video.textTracks);
-      console.log('🎯 Video text tracks found:', tracks.length);
+      log.debug('🎯 Video text tracks found:', tracks.length);
       
       for (const track of tracks) {
         if (track.kind === 'captions' || track.kind === 'subtitles') {
-          console.log(`🎯 Found ${track.kind} track: "${track.label}"`);
+          log.debug(`🎯 Found ${track.kind} track: "${track.label}"`);
           return true; // If track exists, transcript is available
         }
       }
@@ -1362,7 +1336,7 @@ export class UdemyExtractor {
     for (const selector of buttonSelectors) {
       const button = document.querySelector(selector);
       if (button && (button as HTMLElement).offsetParent !== null) {
-        console.log(`🎯 Transcript button found: ${selector}`);
+        log.debug(`🎯 Transcript button found: ${selector}`);
         return true;
       }
     }
@@ -1370,18 +1344,18 @@ export class UdemyExtractor {
     // Method 4: Check for captions dropdown (alternative access)
     const captionsDropdown = document.querySelector('[data-purpose="captions-dropdown-button"]');
     if (captionsDropdown && (captionsDropdown as HTMLElement).offsetParent !== null) {
-      console.log('🎯 Captions dropdown found');
+      log.debug('🎯 Captions dropdown found');
       return true;
     }
     
     // Method 5: Check for any transcript-related elements
     const transcriptElements = document.querySelectorAll('[class*="transcript"], [class*="captions"], [class*="subtitles"]');
     if (transcriptElements.length > 0) {
-      console.log('🎯 Transcript-related elements found:', transcriptElements.length);
+      log.debug('🎯 Transcript-related elements found:', transcriptElements.length);
       return true;
     }
     
-    console.log('🎯 No transcript availability detected');
+    log.debug('🎯 No transcript availability detected');
     return false;
   }
 

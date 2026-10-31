@@ -1,3 +1,4 @@
+import { log } from '../../lib/log';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Library,
@@ -8,10 +9,14 @@ import {
   Moon,
 } from 'lucide-react';
 import {
+  deleteCourse,
   importPendingNotes,
   libraryTotals,
+  listCourses,
   migrateIntoLibrary,
 } from '../../lib/library-db';
+import { BackupControls } from '../BackupControls';
+import { BrandTile } from '../BrandTile';
 import { applyTheme, resolveTheme, storeTheme, type Theme } from '../../lib/theme';
 import { LibraryView } from './LibraryView';
 import { LectureView } from './LectureView';
@@ -52,13 +57,43 @@ export const Dashboard: React.FC = () => {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Bytes this extension is using, as the browser reports it. */
+  const [usage, setUsage] = useState<number | null>(null);
+
+  /** Bumped after a bulk change, so the library re-reads from scratch. */
+  const [libraryVersion, setLibraryVersion] = useState(0);
+
   const refreshTotals = useCallback(async () => {
     try {
       setTotals(await libraryTotals());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The library could not be read.');
     }
+    try {
+      const estimate = await navigator.storage?.estimate?.();
+      setUsage(estimate?.usage ?? null);
+    } catch {
+      setUsage(null);
+    }
   }, []);
+
+  const clearAllHistory = async () => {
+    if (
+      !window.confirm(
+        'Delete every course, transcript, note, highlight and screenshot in your library? This cannot be undone.',
+      )
+    ) {
+      return;
+    }
+    try {
+      for (const course of await listCourses()) await deleteCourse(course.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The library could not be cleared.');
+    }
+    await refreshTotals();
+    setLibraryVersion((v) => v + 1);
+    setView({ name: 'library' });
+  };
 
   // Migrate before first read, so a user opening the dashboard for the first
   // time sees the courses they have already collected rather than an empty
@@ -70,6 +105,7 @@ export const Dashboard: React.FC = () => {
       try {
         await migrateIntoLibrary();
       } catch (cause) {
+        setError('Library upgrade failed. Your existing data has been kept. Reopen the library to retry.');
         console.error('[library] migration failed', cause);
       }
 
@@ -78,8 +114,9 @@ export const Dashboard: React.FC = () => {
       // note cannot stop the library loading.
       try {
         const imported = await importPendingNotes();
-        if (imported > 0) console.log(`[library] imported ${imported} notes from the player`);
+        if (imported > 0) log.debug(`[library] imported ${imported} notes from the player`);
       } catch (cause) {
+        setError('Some player notes could not be imported. They remain queued; reopen the library to retry.');
         console.error('[library] importing player notes failed', cause);
       }
 
@@ -103,15 +140,21 @@ export const Dashboard: React.FC = () => {
     setTheme(next);
   };
 
-  const navItems: { view: View; label: string; icon: React.ReactNode }[] = [
-    { view: { name: 'library' }, label: 'Library', icon: <Library className="w-4 h-4" /> },
-    { view: { name: 'search' }, label: 'Search', icon: <SearchIcon className="w-4 h-4" /> },
+  const navIcon = 'h-[18px] w-[18px]';
+  const navItems: { view: View; label: string; icon: React.ReactNode; count?: number }[] = [
+    {
+      view: { name: 'library' },
+      label: 'Library',
+      icon: <Library className={navIcon} strokeWidth={1.9} />,
+      count: totals?.lectures,
+    },
+    { view: { name: 'search' }, label: 'Search', icon: <SearchIcon className={navIcon} strokeWidth={1.9} /> },
     {
       view: { name: 'highlights' },
       label: 'Highlights',
-      icon: <Highlighter className="w-4 h-4" />,
+      icon: <Highlighter className={navIcon} strokeWidth={1.9} />,
     },
-    { view: { name: 'notes' }, label: 'Notes', icon: <StickyNote className="w-4 h-4" /> },
+    { view: { name: 'notes' }, label: 'Notes', icon: <StickyNote className={navIcon} strokeWidth={1.9} /> },
   ];
 
   const isActive = (candidate: View) =>
@@ -120,100 +163,153 @@ export const Dashboard: React.FC = () => {
     (candidate.name === 'library' && view.name === 'lecture');
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-[1400px]">
-        {/* Navigation. Four destinations, each of which does something real —
-            a longer list would be mostly labels for things that are really
-            just filters over the same records. */}
-        <nav className="w-52 shrink-0 border-r border-slate-200 dark:border-slate-800 px-3 py-4 flex flex-col">
-          {/* Same shape as the popup header, toggle included — two surfaces of
-              one product should not hide the same control in different
-              places. It sat at the very bottom edge before, which is where
-              things go to be missed. */}
-          <div className="flex items-center gap-2 px-2 mb-5">
-            <img
-              src="/icons/icon48.png"
-              alt="Transcript Extractor Logo"
-              className="w-7 h-7 object-contain flex-shrink-0 rounded-lg"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold leading-tight truncate">
-                Transcript Extractor
-              </p>
-              <p className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-                Local · private
-              </p>
-            </div>
-            <button
-              onClick={toggleTheme}
-              className="shrink-0 rounded-lg p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
+    <div className="te-page flex flex-wrap items-stretch gap-4 p-4">
+      {/* Navigation. Four destinations, each of which does something real —
+          a longer list would be mostly labels for things that are really just
+          filters over the same records. */}
+      <nav
+        aria-label="Library sections"
+        className="te-glass te-lib-side box-border flex flex-col gap-[18px] rounded-[22px] px-3 py-4"
+      >
+        {/* Same shape as the popup header, toggle included — two surfaces of
+            one product should not hide the same control in different places. */}
+        <div className="flex items-center gap-2.5 px-1">
+          <BrandTile />
+          <div className="flex min-w-0 flex-grow flex-col gap-px">
+            <p className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+              Transcript Extractor
+            </p>
+            <p className="te-muted flex items-center gap-1.5 text-[12px]">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: 'var(--te-success)' }}
+                aria-hidden="true"
+              />
+              Local · private
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="te-ghost-icon"
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            {theme === 'dark' ? (
+              <Sun className="h-[17px] w-[17px]" strokeWidth={1.8} />
+            ) : (
+              <Moon className="h-[17px] w-[17px]" strokeWidth={1.8} />
+            )}
+          </button>
+        </div>
 
-          <ul className="space-y-0.5">
-            {navItems.map((item) => (
-              <li key={item.label}>
-                <button
-                  onClick={() => setView(item.view)}
-                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors ${
-                    isActive(item.view)
-                      ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              </li>
-            ))}
-          </ul>
+        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+          {navItems.map((item) => (
+            <li key={item.label}>
+              <button
+                type="button"
+                onClick={() => setView(item.view)}
+                aria-current={isActive(item.view) ? 'page' : undefined}
+                className="te-nav-link"
+              >
+                {item.icon}
+                <span className="flex-grow">{item.label}</span>
+                {item.count !== undefined && (
+                  <span className="te-mono text-[12px]">{item.count}</span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
 
-        </nav>
-
-        <main className="flex-1 min-w-0 px-8 py-7">
-          {error && (
-            <div className="mb-5 rounded-xl border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-4 py-3">
-              <p className="text-sm font-semibold text-red-800 dark:text-red-200">
-                The library could not be read
-              </p>
-              <p className="mt-0.5 text-xs text-red-700 dark:text-red-300">{error}</p>
-            </div>
+        <div
+          className="mt-auto flex flex-col gap-1 rounded-[14px] p-3 text-[12px]"
+          style={{ background: 'var(--te-fill)', color: 'var(--te-text-2)' }}
+        >
+          <span className="font-semibold" style={{ color: 'var(--te-text)' }}>
+            Stored on this device
+          </span>
+          <span>
+            {totals ? `${totals.lectures} ${totals.lectures === 1 ? 'transcript' : 'transcripts'}` : '…'}
+            {usage !== null ? ` · ${formatBytes(usage)}` : ''}
+          </span>
+          <BackupControls onChanged={async () => {
+            await refreshTotals();
+            setLibraryVersion(value => value + 1);
+            setView({ name: 'library' });
+          }} />
+          {totals && totals.lectures > 0 && (
+            <button
+              type="button"
+              onClick={() => void clearAllHistory()}
+              className="mt-1 self-start font-medium hover:underline"
+              style={{ color: 'var(--te-accent-text)' }}
+            >
+              Clear all history…
+            </button>
           )}
+        </div>
+      </nav>
 
-          {!ready ? (
-            <p className="text-sm text-slate-500 dark:text-slate-400">Opening your library…</p>
-          ) : view.name === 'library' ? (
-            <LibraryView
-              totals={totals}
-              onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
-              onBrowse={() => setView({ name: 'search' })}
-            />
-          ) : view.name === 'lecture' ? (
-            <LectureView
-              lectureId={view.lectureId}
-              onBack={() => setView({ name: 'library' })}
-              onChanged={refreshTotals}
-            />
-          ) : view.name === 'search' ? (
-            <SearchView onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })} />
-          ) : view.name === 'highlights' ? (
-            <HighlightsView
-              onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
-              onGoToLibrary={() => setView({ name: 'library' })}
-            />
-          ) : (
-            <NotesView
-              onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
-              onGoToLibrary={() => setView({ name: 'library' })}
-            />
-          )}
-        </main>
-      </div>
+      <main className="flex min-w-0 flex-[1_1_480px] flex-col gap-3.5">
+        {error && (
+          <div className="te-note te-note--warn" role="alert">
+            <span>
+              <strong>The library could not be read.</strong> {error}
+            </span>
+          </div>
+        )}
+
+        {ready && <details className="te-glass rounded-[18px] p-4" open={totals?.lectures === 0 ? true : undefined}>
+          <summary className="cursor-pointer font-semibold">Getting started</summary>
+          <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm">
+            <li>Open a supported video with captions. Click the extension icon and extract its transcript.</li>
+            <li>Return here to read, highlight, and add notes. Alt+Shift+N takes a note while watching.</li>
+            <li>Use Search to find passages across saved videos. A timestamp returns you to the player.</li>
+            <li>Export your notes from the reader. Download a complete backup before switching browsers or removing the extension.</li>
+          </ol>
+        </details>}
+        {!ready ? (
+          <p className="te-muted p-1 text-sm">Opening your library…</p>
+        ) : view.name === 'library' ? (
+          <LibraryView
+            key={libraryVersion}
+            totals={totals}
+            onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
+            onChanged={refreshTotals}
+          />
+        ) : (
+          // The reading views keep their own layout; they sit on a glass
+          // panel so they read cleanly over the page wash.
+          <div className="te-glass rounded-[22px] px-6 py-6 md:px-8 md:py-7">
+            {view.name === 'lecture' ? (
+              <LectureView
+                lectureId={view.lectureId}
+                onBack={() => setView({ name: 'library' })}
+                onChanged={refreshTotals}
+              />
+            ) : view.name === 'search' ? (
+              <SearchView onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })} />
+            ) : view.name === 'highlights' ? (
+              <HighlightsView
+                onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
+                onGoToLibrary={() => setView({ name: 'library' })}
+              />
+            ) : (
+              <NotesView
+                onOpenLecture={(lectureId) => setView({ name: 'lecture', lectureId })}
+                onGoToLibrary={() => setView({ name: 'library' })}
+              />
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
 };
+
+/** `3.2 MB`, for the storage note in the sidebar. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}

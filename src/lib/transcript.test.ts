@@ -525,3 +525,11 @@ describe('orderCollectedCues', () => {
     expect(orderCollectedCues([])).toEqual([]);
   });
 });
+
+describe('timing provenance', () => {
+  it('removes the estimated timing marker from cue text while preserving timestamps', () => {
+    expect(parseTranscript('<!-- timing: estimated -->\n\n[00:10] Example')).toEqual([
+      { startSeconds: 10, text: 'Example' },
+    ]);
+  });
+});

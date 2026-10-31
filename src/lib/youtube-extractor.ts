@@ -1,4 +1,18 @@
+import { log } from './log';
 import { errorMessage } from './utils';
+
+interface CaptionTrack {
+  baseUrl: string;
+  languageCode: string;
+  kind?: string;
+}
+
+interface PlayerResponse {
+  videoDetails?: { videoId?: string };
+  captions?: {
+    playerCaptionsTracklistRenderer?: { captionTracks?: CaptionTrack[] };
+  };
+}
 // YouTube Extractor for Transcript Extractor Extension - v3.0.0
 // Handles YouTube video transcript extraction
 
@@ -158,11 +172,11 @@ export class YouTubeExtractor {
    * Test and verify all selectors work correctly
    */
   static testSelectors(): void {
-    console.log('🎯 ===== SELECTOR VERIFICATION TEST =====');
-    console.log('🎯 Current URL:', window.location.href);
+    log.debug('🎯 ===== SELECTOR VERIFICATION TEST =====');
+    log.debug('🎯 Current URL:', window.location.href);
     
     // Test Show Transcript Button
-    console.log('🎯 Testing Show Transcript Button selectors...');
+    log.debug('🎯 Testing Show Transcript Button selectors...');
     const showButtonSelectors = [
       'button[aria-label="Show transcript"]',
       'ytd-video-description-transcript-section-renderer button[aria-label="Show transcript"]',
@@ -171,9 +185,9 @@ export class YouTubeExtractor {
     
     for (const selector of showButtonSelectors) {
       const element = document.querySelector(selector);
-      console.log(`🎯 "${selector}":`, element ? '✅ FOUND' : '❌ NOT FOUND');
+      log.debug(`🎯 "${selector}":`, element ? '✅ FOUND' : '❌ NOT FOUND');
       if (element) {
-        console.log('🎯 Element details:', {
+        log.debug('🎯 Element details:', {
           visible: (element as HTMLElement).offsetParent !== null,
           disabled: (element as HTMLButtonElement).disabled,
           text: element.textContent?.trim(),
@@ -183,7 +197,7 @@ export class YouTubeExtractor {
     }
     
     // Test Transcript Panel
-    console.log('🎯 Testing Transcript Panel selectors...');
+    log.debug('🎯 Testing Transcript Panel selectors...');
     const panelSelectors = [
       'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
       '#segments-container',
@@ -193,9 +207,9 @@ export class YouTubeExtractor {
     
     for (const selector of panelSelectors) {
       const element = document.querySelector(selector);
-      console.log(`🎯 "${selector}":`, element ? '✅ FOUND' : '❌ NOT FOUND');
+      log.debug(`🎯 "${selector}":`, element ? '✅ FOUND' : '❌ NOT FOUND');
       if (element) {
-        console.log('🎯 Panel details:', {
+        log.debug('🎯 Panel details:', {
           height: (element as HTMLElement).offsetHeight,
           visible: (element as HTMLElement).offsetParent !== null,
           hasContent: (element.textContent?.trim().length ?? 0) > 0
@@ -204,7 +218,7 @@ export class YouTubeExtractor {
     }
     
     // Test Transcript Segments
-    console.log('🎯 Testing Transcript Segment selectors...');
+    log.debug('🎯 Testing Transcript Segment selectors...');
     const segmentSelectors = [
       'ytd-transcript-segment-renderer',
       '#segments-container ytd-transcript-segment-renderer',
@@ -213,9 +227,9 @@ export class YouTubeExtractor {
     
     for (const selector of segmentSelectors) {
       const elements = document.querySelectorAll(selector);
-      console.log(`🎯 "${selector}":`, elements.length > 0 ? `✅ FOUND ${elements.length} segments` : '❌ NOT FOUND');
+      log.debug(`🎯 "${selector}":`, elements.length > 0 ? `✅ FOUND ${elements.length} segments` : '❌ NOT FOUND');
       if (elements.length > 0) {
-        console.log('🎯 First segment details:', {
+        log.debug('🎯 First segment details:', {
           html: elements[0].outerHTML.substring(0, 200),
           text: elements[0].textContent?.trim().substring(0, 100),
           ariaLabel: elements[0].getAttribute('aria-label')
@@ -223,7 +237,7 @@ export class YouTubeExtractor {
       }
     }
     
-    console.log('🎯 ===== END SELECTOR VERIFICATION =====');
+    log.debug('🎯 ===== END SELECTOR VERIFICATION =====');
   }
 
   /**
@@ -231,46 +245,48 @@ export class YouTubeExtractor {
    */
   static isTranscriptAvailable(): boolean {
     try {
-      console.log('🎯 YouTubeExtractor.isTranscriptAvailable: Starting check...');
+      if (this.extractTrackList(document).length > 0) return true;
+      log.debug('🎯 YouTubeExtractor.isTranscriptAvailable: Starting check...');
       
       // Check if transcript panel is already open with actual content
       const transcriptPanel = document.querySelector('#segments-container, ytd-transcript-segment-list-renderer, ytd-transcript-renderer');
-      console.log('🎯 Transcript panel found:', !!transcriptPanel);
+      log.debug('🎯 Transcript panel found:', !!transcriptPanel);
       if (transcriptPanel) {
         // Check if there are actual transcript segments
         const segments = transcriptPanel.querySelectorAll('ytd-transcript-segment-renderer');
-        console.log('🎯 Transcript segments found:', segments.length);
+        log.debug('🎯 Transcript segments found:', segments.length);
         if (segments.length > 0) {
-          console.log('🎯 Transcript available: YES (panel with segments)');
+          log.debug('🎯 Transcript available: YES (panel with segments)');
           return true;
         }
       }
 
       // Check if transcript button exists
       const transcriptButton = document.querySelector('[aria-label*="transcript"], [aria-label*="Transcript"], [title*="transcript"], [title*="Transcript"]');
-      console.log('🎯 Transcript button found:', !!transcriptButton);
+      log.debug('🎯 Transcript button found:', !!transcriptButton);
       if (transcriptButton) {
-        console.log('🎯 Transcript available: YES (transcript button)');
+        log.debug('🎯 Transcript available: YES (transcript button)');
         return true;
       }
 
       // Check for closed captions button
       const ccButton = document.querySelector('.ytp-subtitles-button, [aria-label*="captions"], [aria-label*="Captions"]');
-      console.log('🎯 CC button found:', !!ccButton);
-      if (ccButton) {
-        console.log('🎯 Transcript available: YES (CC button)');
+      log.debug('🎯 CC button found:', !!ccButton);
+      if (ccButton && ccButton.getAttribute('aria-disabled') !== 'true' &&
+          !/no captions|no subtitles|không có phụ đề/i.test(ccButton.getAttribute('aria-label') || '')) {
+        log.debug('🎯 Transcript available: YES (CC button)');
         return true;
       }
 
       // Check for engagement panel with transcript
       const engagementPanel = document.querySelector('ytd-engagement-panel-section-list-renderer[panel-target-id="engagement-panel-searchable-transcript"]');
-      console.log('🎯 Engagement panel found:', !!engagementPanel);
+      log.debug('🎯 Engagement panel found:', !!engagementPanel);
       if (engagementPanel) {
-        console.log('🎯 Transcript available: YES (engagement panel)');
+        log.debug('🎯 Transcript available: YES (engagement panel)');
         return true;
       }
 
-      console.log('🎯 Transcript available: NO');
+      log.debug('🎯 Transcript available: NO');
       return false;
     } catch (error) {
       console.error('Error checking transcript availability:', error);
@@ -289,11 +305,14 @@ export class YouTubeExtractor {
       try {
         if (typeof chrome !== 'undefined' && chrome.storage) {
           await chrome.storage.local.remove(['transcript', 'cached_transcript', 'last_transcript']);
-          console.log('🎯 Cleared cached transcript data');
+          log.debug('🎯 Cleared cached transcript data');
         }
       } catch (storageError) {
-        console.log('🎯 Could not clear storage (not available):', storageError);
+        log.debug('🎯 Could not clear storage (not available):', storageError);
       }
+
+      const entries = await this.fetchTrack();
+      if (entries.length > 0) return this.formatTranscript(entries);
 
       // Handle any expand buttons that might be hiding the transcript button
       await this.handleExpandButtons();
@@ -323,12 +342,12 @@ export class YouTubeExtractor {
         
         if (retryEntries.length === 0) {
           // Try alternative extraction methods
-          console.log('🎯 Trying alternative extraction methods...');
+          log.debug('🎯 Trying alternative extraction methods...');
           const alternativeEntries = this.extractTranscriptAlternative();
-          console.log('🎯 Alternative extraction - entries found:', alternativeEntries.length);
+          log.debug('🎯 Alternative extraction - entries found:', alternativeEntries.length);
           
           if (alternativeEntries.length === 0) {
-            throw new Error('No transcript content found. The video may not have captions/transcript available.');
+            throw new Error('No captions available for this YouTube video, or the video is restricted for this browser session.');
           }
           
           const formattedTranscript = this.formatTranscript(alternativeEntries);
@@ -349,6 +368,137 @@ export class YouTubeExtractor {
     }
   }
 
+  private static extractTrackList(source: Document): CaptionTrack[] {
+    const videoId = this.getVideoId();
+    for (const script of source.querySelectorAll('script')) {
+      const content = script.textContent || '';
+      const assignment =
+        /(?:var\s+)?ytInitialPlayerResponse\s*=\s*|window\s*\[\s*["']ytInitialPlayerResponse["']\s*\]\s*=\s*/g;
+      while (assignment.exec(content)) {
+        const start = assignment.lastIndex;
+        if (content[start] !== '{') continue;
+        // Locate the JSON boundary without evaluating any page JavaScript.
+        let depth = 0;
+        let quoted = false;
+        let escaped = false;
+        for (let index = start; index < content.length; index++) {
+          const character = content[index];
+          if (quoted) {
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') quoted = false;
+          } else if (character === '"') quoted = true;
+          else if (character === '{') depth++;
+          else if (character === '}') {
+            depth--;
+            if (depth !== 0) continue;
+            try {
+              const response = JSON.parse(content.slice(start, index + 1)) as PlayerResponse;
+              if (response.videoDetails?.videoId !== videoId) break;
+              const tracks = response.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+              if (Array.isArray(tracks)) {
+                return tracks.filter(track => {
+                  if (
+                    !track ||
+                    typeof track.baseUrl !== 'string' ||
+                    typeof track.languageCode !== 'string'
+                  )
+                    return false;
+                  try {
+                    const url = new URL(track.baseUrl);
+                    return (
+                      url.protocol === 'https:' &&
+                      (url.hostname === 'youtube.com' || url.hostname.endsWith('.youtube.com')) &&
+                      url.pathname === '/api/timedtext' &&
+                      url.searchParams.get('v') === videoId
+                    );
+                  } catch {
+                    return false;
+                  }
+                });
+              }
+            } catch {
+              // Malformed metadata can still fall back to the transcript panel.
+            }
+            break;
+          }
+        }
+      }
+    }
+    return [];
+  }
+
+  private static selectTrack(tracks: CaptionTrack[]): CaptionTrack | undefined {
+    const preferred = (track: CaptionTrack) => /^(en|vi)(-|$)/.test(track.languageCode);
+    return (
+      tracks.find(track => track.kind !== 'asr' && preferred(track)) ||
+      tracks.find(track => track.kind === 'asr') ||
+      tracks[0]
+    );
+  }
+
+  private static async fetchTrack(): Promise<YouTubeTranscriptEntry[]> {
+    try {
+      let tracks = this.extractTrackList(document);
+      if (tracks.length === 0) {
+        const videoId = this.getVideoId();
+        if (!videoId) return [];
+        const response = await fetch(`/watch?v=${encodeURIComponent(videoId)}`, {
+          credentials: 'include',
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) return [];
+        const source = new DOMParser().parseFromString(await response.text(), 'text/html');
+        tracks = this.extractTrackList(source);
+      }
+      const track = this.selectTrack(tracks);
+      if (!track) return [];
+      const url = new URL(track.baseUrl);
+      url.searchParams.set('fmt', 'json3');
+      const response = await fetch(url.href, {
+        credentials: 'include',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) return [];
+      return this.parseTrackResponse(await response.json());
+    } catch {
+      return [];
+    }
+  }
+
+  private static parseTrackResponse(value: unknown): YouTubeTranscriptEntry[] {
+    if (!value || typeof value !== 'object' || !('events' in value) || !Array.isArray(value.events))
+      return [];
+    const entries: YouTubeTranscriptEntry[] = [];
+    for (const event of value.events) {
+      if (
+        !event ||
+        !Number.isFinite(event.tStartMs) ||
+        event.tStartMs < 0 ||
+        !Array.isArray(event.segs)
+      )
+        continue;
+      const text = event.segs
+        .map((segment: { utf8?: unknown } | null) =>
+          typeof segment?.utf8 === 'string' ? segment.utf8 : ''
+        )
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (text) entries.push({ timestamp: this.formatSeconds(event.tStartMs / 1000), text });
+    }
+    return entries;
+  }
+
+  private static formatSeconds(seconds: number): string {
+    const total = Math.floor(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const parts = [String(minutes).padStart(2, '0'), String(total % 60).padStart(2, '0')];
+    if (hours > 0) parts.unshift(String(hours));
+    return parts.join(':');
+  }
+
   /**
    * Ensure transcript panel is open
    */
@@ -367,16 +517,16 @@ export class YouTubeExtractor {
       for (const selector of panelSelectors) {
         existingPanel = document.querySelector<HTMLElement>(selector);
         if (existingPanel) {
-          console.log('🎯 Found existing panel with selector:', selector);
-          console.log('🎯 Panel element:', existingPanel);
-          console.log('🎯 Panel height:', existingPanel.offsetHeight);
-          console.log('🎯 Panel visible:', (existingPanel as HTMLElement).offsetParent !== null);
+          log.debug('🎯 Found existing panel with selector:', selector);
+          log.debug('🎯 Panel element:', existingPanel);
+          log.debug('🎯 Panel height:', existingPanel.offsetHeight);
+          log.debug('🎯 Panel visible:', (existingPanel as HTMLElement).offsetParent !== null);
           
           if (existingPanel.offsetHeight > 0) {
             const segments = existingPanel.querySelectorAll('ytd-transcript-segment-renderer');
-            console.log('🎯 Found segments in existing panel:', segments.length);
+            log.debug('🎯 Found segments in existing panel:', segments.length);
             if (segments.length > 0) {
-              console.log('🎯 Transcript panel already open with content');
+              log.debug('🎯 Transcript panel already open with content');
               return;
             }
           }
@@ -386,7 +536,7 @@ export class YouTubeExtractor {
       // Try to find and click transcript button
       const transcriptButton = this.findTranscriptButton();
       if (transcriptButton) {
-        console.log('🎯 Clicking transcript button...');
+        log.debug('🎯 Clicking transcript button...');
         (transcriptButton as HTMLElement).click();
         
         // Wait for panel to load
@@ -400,7 +550,7 @@ export class YouTubeExtractor {
       // Try to find and click closed captions button
       const ccButton = document.querySelector('.ytp-subtitles-button, [aria-label*="captions"], [aria-label*="Captions"]');
       if (ccButton) {
-        console.log('🎯 Clicking closed captions button...');
+        log.debug('🎯 Clicking closed captions button...');
         (ccButton as HTMLElement).click();
         
         // Wait and then try to find transcript option
@@ -416,7 +566,7 @@ export class YouTubeExtractor {
       // Try to find engagement panel transcript button
       const engagementButton = document.querySelector('[panel-target-id="engagement-panel-searchable-transcript"]');
       if (engagementButton) {
-        console.log('🎯 Clicking engagement panel transcript button...');
+        log.debug('🎯 Clicking engagement panel transcript button...');
         (engagementButton as HTMLElement).click();
         await new Promise(resolve => setTimeout(resolve, 3000));
         await this.handleExpandButtons();
@@ -432,7 +582,7 @@ export class YouTubeExtractor {
    */
   private static async handleExpandButtons(): Promise<void> {
     try {
-      console.log('🎯 Checking for expand buttons...');
+      log.debug('🎯 Checking for expand buttons...');
       
       // Look for expand buttons with various selectors - prioritize the specific one you mentioned
       const expandSelectors = [
@@ -448,11 +598,11 @@ export class YouTubeExtractor {
 
       for (const selector of expandSelectors) {
         const expandButtons = document.querySelectorAll(selector);
-        console.log(`🎯 Found ${expandButtons.length} expand buttons with selector: ${selector}`);
+        log.debug(`🎯 Found ${expandButtons.length} expand buttons with selector: ${selector}`);
         
         for (const button of expandButtons) {
           const element = button as HTMLElement;
-          console.log('🎯 Checking expand button:', {
+          log.debug('🎯 Checking expand button:', {
             selector: selector,
             element: element,
             visible: element && element.offsetHeight > 0 && element.offsetWidth > 0,
@@ -464,7 +614,7 @@ export class YouTubeExtractor {
           });
           
           if (element && element.offsetHeight > 0 && element.offsetWidth > 0) {
-            console.log('🎯 Clicking expand button with selector:', selector);
+            log.debug('🎯 Clicking expand button with selector:', selector);
             element.click();
             await new Promise(resolve => setTimeout(resolve, 500));
           }
@@ -478,7 +628,7 @@ export class YouTubeExtractor {
         if (text && (text.includes('...') || text.includes('more') || text.includes('expand'))) {
           const element = button as HTMLElement;
           if (element && element.offsetHeight > 0 && element.offsetWidth > 0) {
-            console.log('🎯 Clicking button with text:', text);
+            log.debug('🎯 Clicking button with text:', text);
             element.click();
             await new Promise(resolve => setTimeout(resolve, 500));
           }
@@ -494,7 +644,7 @@ export class YouTubeExtractor {
    * Find transcript button on the page
    */
   private static findTranscriptButton(): Element | null {
-    console.log('🎯 YouTubeExtractor.findTranscriptButton: Starting search...');
+    log.debug('🎯 YouTubeExtractor.findTranscriptButton: Starting search...');
     
     const buttonSelectors = [
       // EXACT selectors from HTML analysis - these should work!
@@ -522,18 +672,18 @@ export class YouTubeExtractor {
 
     for (const selector of buttonSelectors) {
       const button = document.querySelector(selector);
-      console.log(`🎯 Checking selector "${selector}":`, !!button);
+      log.debug(`🎯 Checking selector "${selector}":`, !!button);
       if (button) {
-        console.log('🎯 Found transcript button with selector:', selector);
-        console.log('🎯 Button element:', button);
-        console.log('🎯 Button visible:', (button as HTMLElement).offsetParent !== null);
-        console.log('🎯 Button text:', button.textContent?.trim());
-        console.log('🎯 Button aria-label:', button.getAttribute('aria-label'));
+        log.debug('🎯 Found transcript button with selector:', selector);
+        log.debug('🎯 Button element:', button);
+        log.debug('🎯 Button visible:', (button as HTMLElement).offsetParent !== null);
+        log.debug('🎯 Button text:', button.textContent?.trim());
+        log.debug('🎯 Button aria-label:', button.getAttribute('aria-label'));
         return button;
       }
     }
 
-    console.log('🎯 No transcript button found with any selector');
+    log.debug('🎯 No transcript button found with any selector');
     return null;
   }
 
@@ -541,7 +691,7 @@ export class YouTubeExtractor {
    * Alternative extraction method for when primary method fails
    */
   private static extractTranscriptAlternative(): YouTubeTranscriptEntry[] {
-    console.log('🎯 Trying alternative transcript extraction methods...');
+    log.debug('🎯 Trying alternative transcript extraction methods...');
     const entries: YouTubeTranscriptEntry[] = [];
 
     try {
@@ -555,12 +705,12 @@ export class YouTubeExtractor {
         '[class*="transcript"]'
       ].join(','));
 
-      console.log('🎯 Found possible transcript elements:', possibleTranscriptElements.length);
+      log.debug('🎯 Found possible transcript elements:', possibleTranscriptElements.length);
 
       for (const element of possibleTranscriptElements) {
         const text = element.textContent?.trim();
         if (text && text.length > 10) {
-          console.log('🎯 Found transcript text:', text.substring(0, 100));
+          log.debug('Found caption text.');
           // Try to parse as transcript entries
           const lines = text.split('\n').filter(line => line.trim().length > 0);
           let currentTime = '0:00';
@@ -583,7 +733,7 @@ export class YouTubeExtractor {
         }
       }
 
-      console.log('🎯 Alternative extraction found entries:', entries.length);
+      log.debug('🎯 Alternative extraction found entries:', entries.length);
       return entries;
     } catch (error) {
       console.error('🎯 Alternative extraction failed:', error);
@@ -598,7 +748,7 @@ export class YouTubeExtractor {
     const entries: YouTubeTranscriptEntry[] = [];
 
     try {
-      console.log('🎯 extractTranscriptEntries: Starting extraction...');
+      log.debug('🎯 extractTranscriptEntries: Starting extraction...');
       
       // Try multiple selectors for transcript segments - updated with EXACT selectors from HTML analysis
       const segmentSelectors = [
@@ -618,42 +768,42 @@ export class YouTubeExtractor {
       let segments: NodeListOf<Element> | null = null;
       let usedSelector = '';
 
-      console.log('🎯 Checking segment selectors...');
+      log.debug('🎯 Checking segment selectors...');
       for (const selector of segmentSelectors) {
         segments = document.querySelectorAll(selector);
-        console.log(`🎯 Selector "${selector}": found ${segments.length} elements`);
+        log.debug(`🎯 Selector "${selector}": found ${segments.length} elements`);
         if (segments.length > 0) {
           usedSelector = selector;
-          console.log('🎯 Using selector:', usedSelector);
+          log.debug('🎯 Using selector:', usedSelector);
           break;
         }
       }
 
-      console.log('🎯 Found transcript segments:', segments?.length || 0, 'using selector:', usedSelector);
+      log.debug('🎯 Found transcript segments:', segments?.length || 0, 'using selector:', usedSelector);
 
       if (segments && segments.length > 0) {
-        console.log('🎯 Processing segments...');
+        log.debug('🎯 Processing segments...');
         segments.forEach((segment, index) => {
-          console.log(`🎯 Processing segment ${index + 1}/${segments.length}:`, segment);
-          console.log(`🎯 Segment HTML:`, segment.outerHTML.substring(0, 200));
+          log.debug(`🎯 Processing segment ${index + 1}/${segments.length}:`, segment);
+          log.debug(`🎯 Segment HTML:`, segment.outerHTML.substring(0, 200));
           try {
             const entry = this.extractEntryFromSegment(segment);
             if (entry && entry.text.trim().length > 0) {
-              console.log(`🎯 Extracted entry ${index + 1}:`, entry);
+              log.debug(`🎯 Extracted entry ${index + 1}:`, entry);
               entries.push(entry);
             } else {
-              console.log(`🎯 Failed to extract entry from segment ${index + 1}`);
+              log.debug(`🎯 Failed to extract entry from segment ${index + 1}`);
             }
           } catch (error) {
             console.warn(`Error extracting entry ${index}:`, error);
           }
         });
-        console.log('🎯 Total entries extracted:', entries.length);
+        log.debug('🎯 Total entries extracted:', entries.length);
       }
 
       // If no segments found, try alternative method
       if (entries.length === 0) {
-        console.log('🎯 No segments found, trying alternative extraction...');
+        log.debug('🎯 No segments found, trying alternative extraction...');
         const alternativeEntries = this.extractTranscriptAlternative();
         entries.push(...alternativeEntries);
       }
@@ -670,9 +820,9 @@ export class YouTubeExtractor {
    */
   private static extractEntryFromSegment(segment: Element): YouTubeTranscriptEntry | null {
     try {
-      console.log('🎯 extractEntryFromSegment: Processing segment...');
-      console.log('🎯 Segment element:', segment);
-      console.log('🎯 Segment HTML:', segment.outerHTML.substring(0, 300));
+      log.debug('🎯 extractEntryFromSegment: Processing segment...');
+      log.debug('🎯 Segment element:', segment);
+      log.debug('🎯 Segment HTML:', segment.outerHTML.substring(0, 300));
       
       // Try to find timestamp - updated with actual YouTube structure
       const timestampSelectors = [
@@ -683,13 +833,13 @@ export class YouTubeExtractor {
       ];
       
       let timestamp = '';
-      console.log('🎯 Looking for timestamp...');
+      log.debug('🎯 Looking for timestamp...');
       for (const selector of timestampSelectors) {
         const timestampElement = segment.querySelector(selector);
-        console.log(`🎯 Timestamp selector "${selector}":`, timestampElement);
+        log.debug(`🎯 Timestamp selector "${selector}":`, timestampElement);
         if (timestampElement) {
           timestamp = timestampElement.textContent?.trim() || '';
-          console.log(`🎯 Found timestamp: "${timestamp}"`);
+          log.debug(`🎯 Found timestamp: "${timestamp}"`);
           if (timestamp) break;
         }
       }
@@ -697,20 +847,20 @@ export class YouTubeExtractor {
       // Try to find text content - the text is in the aria-label of the segment div
       let text = '';
       
-      console.log('🎯 Looking for text content...');
+      log.debug('🎯 Looking for text content...');
       
       // First try to get from aria-label (this contains the full text)
       const ariaLabel = segment.getAttribute('aria-label');
-      console.log('🎯 aria-label:', ariaLabel);
+      log.debug('🎯 aria-label:', ariaLabel);
       if (ariaLabel) {
         // Remove timestamp from aria-label if present
         const timestampMatch = ariaLabel.match(/^(\d+)\s+seconds?\s+(.*)/);
         if (timestampMatch) {
           text = timestampMatch[2];
-          console.log('🎯 Extracted text from aria-label (removed timestamp):', text.substring(0, 100));
+          log.debug('🎯 Extracted text from aria-label (removed timestamp):', text.substring(0, 100));
         } else {
           text = ariaLabel;
-          console.log('🎯 Using full aria-label as text:', text.substring(0, 100));
+          log.debug('🎯 Using full aria-label as text:', text.substring(0, 100));
         }
       }
       
@@ -829,27 +979,27 @@ export class YouTubeExtractor {
    */
   static extractPlaylist(): YouTubePlaylist | null {
     try {
-      console.log('🎯 Starting YouTube playlist extraction...');
+      log.debug('🎯 Starting YouTube playlist extraction...');
       
       // Check if we're on a YouTube page with playlist
       if (!this.isYouTubeVideoPage()) {
-        console.log('🎯 Not on a YouTube video page');
+        log.debug('🎯 Not on a YouTube video page');
         return null;
       }
 
       // Look for playlist panel
       const playlistPanel = this.findPlaylistPanel();
       if (!playlistPanel) {
-        console.log('🎯 No playlist panel found');
+        log.debug('🎯 No playlist panel found');
         return null;
       }
 
       // Extract playlist videos
       const videos = this.extractPlaylistVideos(playlistPanel);
-      console.log('🎯 Extracted playlist videos:', videos.length);
+      log.debug('🎯 Extracted playlist videos:', videos.length);
 
       if (videos.length === 0) {
-        console.log('🎯 No videos found in playlist');
+        log.debug('🎯 No videos found in playlist');
         return null;
       }
 
@@ -862,7 +1012,7 @@ export class YouTubeExtractor {
         totalVideos: videos.length
       };
 
-      console.log('🎯 Playlist extraction completed:', {
+      log.debug('🎯 Playlist extraction completed:', {
         title: playlist.title,
         totalVideos: playlist.totalVideos
       });
@@ -880,7 +1030,7 @@ export class YouTubeExtractor {
    */
   private static findPlaylistPanel(): Element | null {
     try {
-      console.log('🎯 Looking for playlist panel...');
+      log.debug('🎯 Looking for playlist panel...');
       
       const playlistSelectors = [
         // Main playlist panel selectors
@@ -898,8 +1048,8 @@ export class YouTubeExtractor {
       for (const selector of playlistSelectors) {
         const element = document.querySelector(selector);
         if (element) {
-          console.log('🎯 Found playlist panel with selector:', selector);
-          console.log('🎯 Panel element:', element);
+          log.debug('🎯 Found playlist panel with selector:', selector);
+          log.debug('🎯 Panel element:', element);
           return element;
         }
       }
@@ -907,11 +1057,11 @@ export class YouTubeExtractor {
       // Look for any container with playlist video renderers
       const videoRenderers = document.querySelectorAll('ytd-playlist-panel-video-renderer');
       if (videoRenderers.length > 0) {
-        console.log('🎯 Found playlist video renderers:', videoRenderers.length);
+        log.debug('🎯 Found playlist video renderers:', videoRenderers.length);
         return videoRenderers[0].closest('ytd-playlist-panel-renderer') || videoRenderers[0].parentElement;
       }
 
-      console.log('🎯 No playlist panel found');
+      log.debug('🎯 No playlist panel found');
       return null;
     } catch (error) {
       console.error('Error finding playlist panel:', error);
@@ -926,7 +1076,7 @@ export class YouTubeExtractor {
     const videos: YouTubePlaylistVideo[] = [];
 
     try {
-      console.log('🎯 Extracting videos from playlist panel...');
+      log.debug('🎯 Extracting videos from playlist panel...');
       
       // Find all playlist video renderers
       const videoSelectors = [
@@ -939,31 +1089,31 @@ export class YouTubeExtractor {
       for (const selector of videoSelectors) {
         videoElements = playlistPanel.querySelectorAll(selector);
         if (videoElements.length > 0) {
-          console.log('🎯 Found videos with selector:', selector);
+          log.debug('🎯 Found videos with selector:', selector);
           break;
         }
       }
 
       if (!videoElements || videoElements.length === 0) {
-        console.log('🎯 No video elements found in playlist panel');
+        log.debug('🎯 No video elements found in playlist panel');
         return videos;
       }
 
-      console.log('🎯 Processing', videoElements.length, 'playlist videos...');
+      log.debug('🎯 Processing', videoElements.length, 'playlist videos...');
 
       videoElements.forEach((videoElement, index) => {
         try {
           const video = this.extractVideoFromPlaylistElement(videoElement, index + 1);
           if (video) {
             videos.push(video);
-            console.log(`🎯 Extracted video ${index + 1}:`, video.title);
+            log.debug(`🎯 Extracted video ${index + 1}:`, video.title);
           }
         } catch (error) {
           console.warn(`Error extracting video ${index + 1}:`, error);
         }
       });
 
-      console.log('🎯 Successfully extracted', videos.length, 'videos from playlist');
+      log.debug('🎯 Successfully extracted', videos.length, 'videos from playlist');
       return videos;
 
     } catch (error) {
@@ -977,7 +1127,7 @@ export class YouTubeExtractor {
    */
   private static extractVideoFromPlaylistElement(videoElement: Element, index: number): YouTubePlaylistVideo | null {
     try {
-      console.log(`🎯 Extracting video ${index} from playlist element...`);
+      log.debug(`🎯 Extracting video ${index} from playlist element...`);
       
       // Extract video title
       const titleSelectors = [
@@ -999,7 +1149,7 @@ export class YouTubeExtractor {
       }
 
       if (!title) {
-        console.log(`🎯 Could not extract title for video ${index}`);
+        log.debug(`🎯 Could not extract title for video ${index}`);
         return null;
       }
 
@@ -1052,7 +1202,7 @@ export class YouTubeExtractor {
         isCurrentVideo: isCurrentVideo
       };
 
-      console.log(`🎯 Extracted video ${index}:`, {
+      log.debug(`🎯 Extracted video ${index}:`, {
         title: video.title,
         videoId: video.videoId,
         duration: video.duration,
@@ -1106,7 +1256,7 @@ export class YouTubeExtractor {
    * Test all selectors for debugging
    */
   static testAllSelectors(): void {
-    console.log('🎯 Testing YouTube selectors...');
+    log.debug('🎯 Testing YouTube selectors...');
     
     const selectors = [
       'h1.ytd-watch-metadata yt-formatted-string',
@@ -1121,11 +1271,11 @@ export class YouTubeExtractor {
 
     selectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`🎯 Selector "${selector}": ${elements.length} elements found`);
+      log.debug(`🎯 Selector "${selector}": ${elements.length} elements found`);
       if (elements.length > 0) {
         elements.forEach((el, i) => {
           const text = el.textContent?.substring(0, 50) || '';
-          console.log(`  Element ${i + 1}: "${text}..."`);
+          log.debug(`  Element ${i + 1}: "${text}..."`);
         });
       }
     });

@@ -1,6 +1,6 @@
 # Transcript Extractor – Privacy Policy
 
-_Last updated: 28 September 2026_
+_Last updated: 16 October 2026_
 
 Transcript Extractor helps students, educators, researchers and content creators
 turn video lectures into notes they can keep, search and take elsewhere.
@@ -16,8 +16,10 @@ what that means.
 personally identifiable information.
 
 There is no account, no analytics, no telemetry, no crash reporting and no
-remote configuration. The extension makes **no network requests of any kind**
-while it runs.
+remote configuration. Transcript extraction may request caption files and video metadata
+from the source platform using your existing browser session. These requests are
+needed to read captions you can access; they do not upload your library to our servers.
+Search, annotation, and export processing run locally.
 
 Specifically, we never collect:
 
@@ -44,6 +46,7 @@ Removing the extension deletes all of it.
 | Text read from screenshots | IndexedDB | So the same image is not re-read every time |
 | Notes written with the keyboard shortcut | `chrome.storage`, briefly | A lecture page cannot write to the library directly, so a note waits there until you next open the dashboard |
 | The course collection the popup shows | `chrome.storage` | So the popup and the library agree on what has been collected |
+| Full library backups you download | A JSON file in your chosen download location | Includes transcript records, annotations, and screenshot assets; restore merges it into the library |
 | Preferences (export format, theme, reader layout) | `chrome.storage` | So the extension opens the way you left it |
 
 You can delete any of it at any time from within the extension, or all of it by
@@ -83,15 +86,16 @@ rest of the extension is unaffected.
 | `clipboardWrite` | Copy a transcript when you ask for it |
 | Host access to `udemy.com`, `coursera.org`, `youtube.com` | Read transcripts on those sites |
 
-The extension does **not** request access to all websites, and does not run on
-sites other than those listed above.
+The extension does **not** request persistent access to all websites. It runs
+automatically on the three listed platforms. When you explicitly invoke it on
+another page, `activeTab` allows an attempt to read standard HTML5 captions there.
 
 ---
 
 ## 5. Data sharing
 
 There is nothing to share. No data is sold, rented, transferred or disclosed to
-any third party, because no data ever leaves your device.
+any third party, because we do not operate a service that receives your library. Files you choose to export or back up are under your control.
 
 ---
 

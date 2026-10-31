@@ -1,3 +1,4 @@
+import { log } from './log';
 /**
  * The learning library, on disk.
  *
@@ -25,7 +26,7 @@ import {
   type TranscriptRecord,
 } from './library-schema';
 import type { CapturedFrame } from './frame-capture';
-import { takePendingNotes } from './pending-notes';
+import { readPendingNotes, acknowledgeNote } from './pending-notes';
 
 const DB_NAME = 'transcript-extractor-library';
 
@@ -117,9 +118,15 @@ function run<T>(
       new Promise<T>((resolve, reject) => {
         const tx = db.transaction(store, mode);
         const request = work(tx.objectStore(store));
-        request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error ?? new Error(`${store} request failed`));
-        tx.oncomplete = () => db.close();
+        tx.oncomplete = () => {
+          db.close();
+          resolve(request.result);
+        };
+        tx.onabort = () => {
+          db.close();
+          reject(tx.error ?? new Error(`${store} transaction aborted`));
+        };
       }),
   );
 }
@@ -127,8 +134,10 @@ function run<T>(
 /** Write many records across several stores in one transaction. */
 function writeAll(
   entries: { store: StoreName; records: unknown[] }[],
+  reassignment?: { recordId: string; previousId: string; nextId: string },
 ): Promise<void> {
-  const stores = [...new Set(entries.map((entry) => entry.store))];
+  const related = [STORES.notes, STORES.highlights, STORES.screenshots, STORES.transcripts] as const;
+  const stores = [...new Set([...entries.map((entry) => entry.store), ...(reassignment ? related : [])])];
   if (stores.length === 0) return Promise.resolve();
 
   return openLibrary().then(
@@ -139,12 +148,31 @@ function writeAll(
           const target = tx.objectStore(store);
           for (const record of records) target.put(record);
         }
+        if (reassignment) {
+          for (const name of related) {
+            const store = tx.objectStore(name);
+            // Transcripts are keyed directly by the entry; attachments have an entry index.
+            const request = name === STORES.transcripts ? store.get(reassignment.recordId)
+              : store.index('lectureId').getAll(reassignment.recordId);
+            request.onsuccess = () => {
+              const records = name === STORES.transcripts
+                ? (request.result ? [request.result] : []) : request.result;
+              for (const record of records) store.put({ ...record, courseId: reassignment.nextId });
+            };
+          }
+          const count = tx.objectStore(STORES.lectures).index('courseId').count(reassignment.previousId);
+          count.onsuccess = () => {
+            if (count.result === 0) tx.objectStore(STORES.courses).delete(reassignment.previousId);
+          };
+        }
         tx.oncomplete = () => {
           db.close();
           resolve();
         };
-        tx.onerror = () => reject(tx.error ?? new Error('Library write failed'));
-        tx.onabort = () => reject(tx.error ?? new Error('Library write aborted'));
+        tx.onabort = () => {
+          db.close();
+          reject(tx.error ?? new Error('Library write aborted'));
+        };
       }),
   );
 }
@@ -161,6 +189,10 @@ export async function listCourses(): Promise<CourseRecord[]> {
 
 export async function getCourse(courseId: string): Promise<CourseRecord | undefined> {
   return run<CourseRecord | undefined>(STORES.courses, 'readonly', (s) => s.get(courseId));
+}
+
+export async function getLecture(lectureId: string): Promise<LectureRecord | undefined> {
+  return run<LectureRecord | undefined>(STORES.lectures, 'readonly', (s) => s.get(lectureId));
 }
 
 /** Lecture records for a course — metadata only, no transcript text. */
@@ -264,6 +296,7 @@ export async function saveLecture(
   const courseId = courseIdFromUrl(lecture.url);
   const existing = await getCourse(courseId);
   const now = Date.now();
+  const previous = await getLecture(lecture.id);
 
   const { course, lectures, transcripts } = toLibraryRecords(courseId, [lecture], {
     title: meta.courseTitle ?? existing?.title,
@@ -277,9 +310,12 @@ export async function saveLecture(
       // Keep the original creation date; only the touch time moves.
       records: [{ ...course, createdAt: existing?.createdAt ?? course.createdAt, updatedAt: now }],
     },
-    { store: STORES.lectures, records: lectures },
+    { store: STORES.lectures, records: lectures.map(item => ({ ...previous, ...item,
+      collectedAt: previous?.collectedAt ?? item.collectedAt,
+      wordCount: lecture.transcript ? item.wordCount : previous?.wordCount ?? item.wordCount })) },
     { store: STORES.transcripts, records: transcripts },
-  ]);
+  ], previous && previous.courseId !== courseId
+    ? { recordId: lecture.id, previousId: previous.courseId, nextId: courseId } : undefined);
 }
 
 /**
@@ -385,6 +421,9 @@ export async function deleteLecture(lectureId: string): Promise<void> {
     listHighlights(lectureId),
   ]);
 
+  await updateLegacyCopies(lectureId, false);
+  await deleteLegacyFrames(lectureId);
+
   await run(STORES.lectures, 'readwrite', (s) => s.delete(lectureId));
   await run(STORES.transcripts, 'readwrite', (s) => s.delete(lectureId));
   for (const note of notes) await deleteNote(note.id);
@@ -404,6 +443,7 @@ export async function deleteLecture(lectureId: string): Promise<void> {
 
 /** Remove only the transcript text for a lecture, keeping the lecture and its notes/highlights. */
 export async function deleteTranscript(lectureId: string): Promise<void> {
+  await updateLegacyCopies(lectureId, true);
   await run(STORES.transcripts, 'readwrite', (s) => s.delete(lectureId));
   const lecture = await run<LectureRecord | undefined>(STORES.lectures, 'readonly', (s) =>
     s.get(lectureId),
@@ -411,6 +451,53 @@ export async function deleteTranscript(lectureId: string): Promise<void> {
   if (lecture) {
     await run(STORES.lectures, 'readwrite', (s) => s.put({ ...lecture, wordCount: 0 }));
   }
+}
+
+/** Keep recovery sources consistent with an explicit deletion. */
+async function updateLegacyCopies(lectureId: string, keepEntry: boolean): Promise<void> {
+  if (typeof chrome === 'undefined' || !chrome.storage) return;
+  const stored = await chrome.storage.local.get(null);
+  const changes: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(stored)) {
+    if (!key.startsWith('collection:') || !Array.isArray(value)) continue;
+    if (!value.some((item) => item?.id === lectureId)) continue;
+    changes[key] = keepEntry
+      ? value.map((item) => item?.id === lectureId ? { ...item, transcript: '' } : item)
+      : value.filter((item) => item?.id !== lectureId);
+  }
+  if (Object.keys(changes).length > 0) await chrome.storage.local.set(changes);
+}
+
+async function deleteLegacyFrames(lectureId: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(LEGACY_FRAME_DB);
+    request.onerror = () => reject(request.error ?? new Error('Could not open screenshot storage'));
+    request.onblocked = () => reject(new Error('Screenshot storage is busy. Close other extension pages and retry.'));
+    request.onsuccess = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('frames')) {
+        db.close();
+        resolve();
+        return;
+      }
+      const tx = db.transaction('frames', 'readwrite');
+      const store = tx.objectStore('frames');
+      const all = store.getAll();
+      all.onsuccess = () => {
+        for (const frame of all.result as CapturedFrame[]) {
+          if (frame.lectureId === lectureId) store.delete([frame.lectureId, frame.seconds]);
+        }
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(tx.error ?? new Error('Screenshot deletion failed'));
+      };
+    };
+  });
 }
 
 /** Remove a whole course and all lectures, transcripts, notes, highlights, and screenshots in it. */
@@ -478,7 +565,7 @@ function readLegacyFrames(): Promise<CapturedFrame[]> {
  * deterministic id, so a second run overwrites identical records rather than
  * duplicating them.
  */
-export async function migrateIntoLibrary(force = false): Promise<MigrationResult> {
+async function migrateLegacy(force = false): Promise<MigrationResult> {
   const empty: MigrationResult = { ran: false, courses: 0, lectures: 0, screenshots: 0 };
 
   if (typeof chrome === 'undefined' || !chrome.storage) return empty;
@@ -535,7 +622,7 @@ export async function migrateIntoLibrary(force = false): Promise<MigrationResult
 
   await chrome.storage.local.set({ [MIGRATION_FLAG]: Date.now() });
 
-  console.log(
+  log.debug(
     `[library] migrated ${courses} courses, ${lectures} lectures, ${shots.length} screenshots`,
   );
 
@@ -557,10 +644,10 @@ export async function migrateIntoLibrary(force = false): Promise<MigrationResult
  * its collection date.
  */
 export async function importPendingNotes(): Promise<number> {
-  const queued = await takePendingNotes();
+  const queued = await readPendingNotes();
   if (queued.length === 0) return 0;
 
-  const known = new Set((await listAllLectures().catch(() => [])).map((entry) => entry.id));
+  const known = new Set((await listAllLectures()).map((entry) => entry.id));
 
   for (const pending of queued) {
     if (!known.has(pending.lectureId)) {
@@ -577,12 +664,13 @@ export async function importPendingNotes(): Promise<number> {
     await saveNote({
       id: pending.id,
       lectureId: pending.lectureId,
-      courseId: courseIdFromUrl(pending.url),
+      courseId: (await getLecture(pending.lectureId))!.courseId,
       seconds: pending.seconds,
       body: pending.body,
       createdAt: pending.createdAt,
       updatedAt: pending.createdAt,
     });
+    await acknowledgeNote(pending.id);
   }
 
   return queued.length;
@@ -608,3 +696,105 @@ export async function libraryTotals(): Promise<{
 
 /** Exported for tests and for recomputing a stale count. */
 export { countWords };
+
+/** A consistent, complete library image, including inline screenshot assets. */
+export interface LibrarySnapshot {
+  courses: CourseRecord[];
+  lectures: LectureRecord[];
+  transcripts: TranscriptRecord[];
+  notes: NoteRecord[];
+  highlights: HighlightRecord[];
+  screenshots: ScreenshotRecord[];
+}
+
+export async function readSnapshot(): Promise<LibrarySnapshot> {
+  const db = await openLibrary();
+  return new Promise((resolve, reject) => {
+    const names = Object.values(STORES);
+    const tx = db.transaction(names, 'readonly');
+    const result = {} as LibrarySnapshot;
+    for (const name of names) {
+      const request = tx.objectStore(name).getAll();
+      request.onsuccess = () => { (result[name] as unknown[]) = request.result; };
+    }
+    tx.oncomplete = () => { db.close(); resolve(result); };
+    tx.onabort = () => { db.close(); reject(tx.error ?? new Error('Library could not be read.')); };
+  });
+}
+
+/** Merge atomically. Existing keys win; restoring the same file twice is safe. */
+export async function restoreSnapshot(snapshot: LibrarySnapshot): Promise<void> {
+  const db = await openLibrary();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(Object.values(STORES), 'readwrite');
+    for (const name of Object.values(STORES)) {
+      const store = tx.objectStore(name);
+      for (const record of snapshot[name]) {
+        const key: IDBValidKey = name === 'screenshots'
+          ? [(record as ScreenshotRecord).lectureId, (record as ScreenshotRecord).seconds]
+          : name === 'transcripts' ? (record as TranscriptRecord).lectureId
+          : (record as CourseRecord).id;
+        const request = store.get(key);
+        request.onsuccess = () => { if (request.result === undefined) store.add(record); };
+      }
+    }
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onabort = () => { db.close(); reject(tx.error ?? new Error('Restore failed. No records were imported.')); };
+  });
+}
+
+/** Repair group keys without changing lecture IDs or annotation associations. */
+export async function normalizeGroups(): Promise<void> {
+  const db = await openLibrary();
+  return new Promise((resolve, reject) => {
+    const names = Object.values(STORES);
+    const tx = db.transaction(names, 'readwrite');
+    const snapshot = {} as LibrarySnapshot;
+    let remaining = names.length;
+    for (const name of names) {
+      const request = tx.objectStore(name).getAll();
+      request.onsuccess = () => {
+        (snapshot[name] as unknown[]) = request.result;
+        if (--remaining !== 0) return;
+        const courses = new Map(snapshot.courses.map(record => [record.id, record]));
+        const groups = new Map(snapshot.lectures.map(record => [record.id,
+          record.url ? courseIdFromUrl(record.url) : record.courseId]));
+        const changed = snapshot.lectures.filter(record => groups.get(record.id) !== record.courseId);
+        for (const record of changed) {
+          const id = groups.get(record.id)!;
+          if (!courses.has(id)) {
+            const source = courses.get(record.courseId);
+            if (source) {
+              const target = { ...source, id, url: id.slice('course:'.length) };
+              courses.set(id, target);
+              tx.objectStore(STORES.courses).put(target);
+            }
+          }
+        }
+        for (const store of names.filter(name => name !== 'courses')) {
+          for (const record of snapshot[store]) {
+            const id = groups.get('lectureId' in record ? record.lectureId : record.id);
+            if (id && id !== record.courseId) tx.objectStore(store).put({ ...record, courseId: id });
+          }
+        }
+        const occupied = new Set(groups.values());
+        for (const id of new Set(changed.map(record => record.courseId))) {
+          if (!occupied.has(id)) tx.objectStore(STORES.courses).delete(id);
+        }
+      };
+    }
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onabort = () => { db.close(); reject(tx.error ?? new Error('Group migration failed. No data was changed.')); };
+  });
+}
+
+export async function migrateIntoLibrary(force = false): Promise<MigrationResult> {
+  const result = await migrateLegacy(force);
+  const flag = 'library:groups:v2';
+  const storage = typeof chrome !== 'undefined' ? chrome.storage?.local : undefined;
+  if (force || !storage || !(await storage.get(flag))[flag]) {
+    await normalizeGroups();
+    if (storage) await storage.set({ [flag]: Date.now() });
+  }
+  return result;
+}

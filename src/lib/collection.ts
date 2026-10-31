@@ -1,3 +1,4 @@
+import { groupKey } from './identity';
 /**
  * A course collection — transcripts accumulated across lectures.
  *
@@ -92,16 +93,7 @@ export function totalWords(collection: CollectedLecture[]): number {
  * Two courses open in two tabs must not append into each other.
  */
 export function collectionKey(url: string | undefined): string {
-  if (!url) return 'collection:unknown';
-  try {
-    const parsed = new URL(url);
-    // Udemy: /course/<slug>/learn/lecture/<id> — the course slug is the scope.
-    const courseMatch = parsed.pathname.match(/^\/course\/([^/]+)/);
-    if (courseMatch) return `collection:${parsed.origin}/course/${courseMatch[1]}`;
-    return `collection:${parsed.origin}${parsed.pathname}`;
-  } catch {
-    return `collection:${url}`;
-  }
+  return 'collection:' + groupKey(url);
 }
 
 export async function loadCollection(url: string | undefined): Promise<CollectedLecture[]> {

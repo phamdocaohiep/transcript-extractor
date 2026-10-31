@@ -1,3 +1,4 @@
+import { log } from './log';
 import type { ExportFormat } from './extension-service';
 
 // Chrome Storage Service for Extension State Persistence
@@ -46,7 +47,7 @@ export class StorageService {
       // Save to Chrome storage
       await chrome.storage.local.set({ [this.STORAGE_KEY]: updatedState });
       
-      console.log('🎯 State saved to Chrome storage:', updatedState);
+      log.debug('State saved.');
     } catch (error) {
       console.error('Failed to save state:', error);
     }
@@ -80,7 +81,7 @@ export class StorageService {
   static async clearState(): Promise<void> {
     try {
       await chrome.storage.local.remove(this.STORAGE_KEY);
-      console.log('🎯 State cleared from Chrome storage');
+      log.debug('🎯 State cleared from Chrome storage');
     } catch (error) {
       console.error('Failed to clear state:', error);
     }
@@ -150,7 +151,7 @@ export class StorageService {
         'clipboardData': clipboardData,
         'clipboardEntries': clipboardEntries
       });
-      console.log('🎯 Clipboard data saved to Chrome storage. Entries:', clipboardEntries);
+      log.debug('🎯 Clipboard data saved to Chrome storage. Entries:', clipboardEntries);
     } catch (error) {
       console.error('Failed to save clipboard data:', error);
     }
@@ -181,7 +182,7 @@ export class StorageService {
   static async clearClipboardData(): Promise<void> {
     try {
       await chrome.storage.local.remove(['clipboardData', 'clipboardEntries']);
-      console.log('🎯 Clipboard data cleared from Chrome storage');
+      log.debug('🎯 Clipboard data cleared from Chrome storage');
     } catch (error) {
       console.error('Failed to clear clipboard data:', error);
     }
@@ -193,7 +194,7 @@ export class StorageService {
   static async clearAllData(): Promise<void> {
     try {
       await chrome.storage.local.clear();
-      console.log('🎯 All extension data cleared from Chrome storage');
+      log.debug('🎯 All extension data cleared from Chrome storage');
     } catch (error) {
       console.error('Failed to clear all extension data:', error);
     }

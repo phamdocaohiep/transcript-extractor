@@ -4,8 +4,8 @@
  * A note taken while watching cannot be saved where it belongs at the moment it
  * is written. The library is IndexedDB on the extension's own origin, and a
  * content script's `indexedDB` is the *site's* — writing there would put a note
- * about a lecture into Udemy's storage, where nothing would ever read it. There
- * is no background service worker to hand it to either.
+ * about a lecture into Udemy's storage, where nothing would ever read it. Notes
+ * use a durable queue so worker restarts and page closure cannot discard them.
  *
  * So notes go into `chrome.storage.local`, which content scripts and extension
  * pages genuinely share, and the dashboard drains the queue into the library
@@ -44,12 +44,14 @@ export function validPendingNotes(raw: unknown): PendingNote[] {
     if (!entry || typeof entry !== 'object') return false;
     const note = entry as Partial<PendingNote>;
     return (
-      typeof note.id === 'string' &&
+      typeof note.id === 'string' && note.id.length > 0 &&
+      typeof note.url === 'string' && typeof note.lectureTitle === 'string' &&
+      typeof note.createdAt === 'number' && Number.isFinite(note.createdAt) &&
       typeof note.lectureId === 'string' &&
       note.lectureId.length > 0 &&
       typeof note.body === 'string' &&
       note.body.trim().length > 0 &&
-      (note.seconds === undefined || (typeof note.seconds === 'number' && note.seconds >= 0))
+      (note.seconds === undefined || (typeof note.seconds === 'number' && Number.isFinite(note.seconds) && note.seconds >= 0))
     );
   });
 }
@@ -63,47 +65,39 @@ function storage(): chrome.storage.LocalStorageArea | null {
   }
 }
 
-/**
- * Add a note to the queue.
- *
- * Read-modify-write rather than append, because `chrome.storage` has no append.
- * Two lectures queuing at the same instant is not a real scenario: this is one
- * person typing in one tab.
- */
+/** Each note has its own key so simultaneous tabs cannot overwrite a shared array. */
+const PREFIX = 'pending-note:';
+
 export async function queueNote(note: PendingNote): Promise<boolean> {
   const area = storage();
-  if (!area) return false;
-
+  if (!area || validPendingNotes([note]).length !== 1) return false;
   try {
-    const held = await area.get(PENDING_NOTES_KEY);
-    const queue = validPendingNotes((held as Record<string, unknown>)[PENDING_NOTES_KEY]);
-    await area.set({ [PENDING_NOTES_KEY]: [...queue, note] });
+    await area.set({ [`${PREFIX}${note.id}`]: note });
     return true;
   } catch {
     return false;
   }
 }
 
-/**
- * Take everything queued, clearing it.
- *
- * Cleared only after the read succeeds, so a failure leaves the notes where
- * they are rather than dropping them. The caller has to be able to write them
- * on; if it cannot, they are lost either way, and a queue that empties itself
- * on a read that went nowhere would be the worse of the two.
- */
-export async function takePendingNotes(): Promise<PendingNote[]> {
+/** Reading never acknowledges delivery. A failed database write must remain retryable. */
+export async function readPendingNotes(): Promise<PendingNote[]> {
   const area = storage();
   if (!area) return [];
+  const held = await area.get(null);
+  const notes = validPendingNotes(held[PENDING_NOTES_KEY]);
+  notes.push(...validPendingNotes(Object.entries(held)
+    .filter(([key]) => key.startsWith(PREFIX)).map(([, value]) => value)));
+  return [...new Map(notes.map(note => [note.id, note])).values()];
+}
 
-  try {
-    const held = await area.get(PENDING_NOTES_KEY);
-    const queue = validPendingNotes((held as Record<string, unknown>)[PENDING_NOTES_KEY]);
-    if (queue.length === 0) return [];
-
-    await area.remove(PENDING_NOTES_KEY);
-    return queue;
-  } catch {
-    return [];
+/** Called only after the corresponding IndexedDB transaction commits. */
+export async function acknowledgeNote(id: string): Promise<void> {
+  const area = storage();
+  if (!area) throw new Error('Note storage is unavailable.');
+  await area.remove(`${PREFIX}${id}`);
+  const held = await area.get(PENDING_NOTES_KEY);
+  const legacy = validPendingNotes(held[PENDING_NOTES_KEY]);
+  if (legacy.some(note => note.id === id)) {
+    await area.set({ [PENDING_NOTES_KEY]: legacy.filter(note => note.id !== id) });
   }
 }

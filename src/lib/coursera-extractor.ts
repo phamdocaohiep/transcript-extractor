@@ -1,3 +1,5 @@
+import { log } from './log';
+import { parseTimestamp } from './transcript';
 import { errorMessage } from './utils';
 // Coursera Extractor for Transcript Extractor Extension
 // Handles transcript extraction from Coursera course videos
@@ -141,13 +143,14 @@ export class CourseraExtractor {
       // Look for transcript phrases
       const phrases = document.querySelectorAll('.rc-Phrase');
       
-      phrases.forEach((phrase, index) => {
+      phrases.forEach((phrase) => {
         const text = phrase.textContent?.trim();
         if (text) {
           // Try to find associated timestamp
           const paragraph = phrase.closest('.rc-Paragraph');
           const timestampElement = paragraph?.querySelector('.timestamp');
-          const timestamp = timestampElement?.textContent?.trim() || `${index * 5}:00`;
+          const candidate = timestampElement?.textContent?.trim() || '';
+          const timestamp = parseTimestamp(candidate) === null ? '' : candidate;
 
           entries.push({
             timestamp,
@@ -159,11 +162,11 @@ export class CourseraExtractor {
       // If no phrases found, try alternative selectors
       if (entries.length === 0) {
         const alternativePhrases = document.querySelectorAll('[data-cue]');
-        alternativePhrases.forEach((phrase, index) => {
+        alternativePhrases.forEach((phrase) => {
           const text = phrase.textContent?.trim();
           if (text) {
             entries.push({
-              timestamp: `${index * 5}:00`,
+              timestamp: '',
               text
             });
           }
@@ -303,21 +306,10 @@ export class CourseraExtractor {
       return '';
     }
 
-    // Get video title
-    const videoInfo = this.getCurrentVideoInfo();
-    const title = videoInfo?.title || 'Coursera Video';
-
-    // Format transcript
-    let formattedTranscript = `# ${title}\n\n`;
-    formattedTranscript += `**Source:** Coursera Video\n`;
-    formattedTranscript += `**URL:** ${window.location.href}\n`;
-    formattedTranscript += `**Extracted:** ${new Date().toLocaleString()}\n\n`;
-    formattedTranscript += `---\n\n`;
-
-    // Add transcript content
-    entries.forEach(entry => {
-      formattedTranscript += `**[${entry.timestamp}]** ${entry.text}\n\n`;
-    });
+    // Keep the same canonical format as every other extractor. Missing times stay absent.
+    const formattedTranscript = entries.map(entry =>
+      entry.timestamp ? `[${entry.timestamp}] ${entry.text}` : entry.text
+    ).join('\n\n');
 
     return formattedTranscript;
   }
@@ -369,7 +361,7 @@ export class CourseraExtractor {
    * Test all selectors for debugging
    */
   static testAllSelectors(): void {
-    console.log('🎯 Testing Coursera selectors...');
+    log.debug('🎯 Testing Coursera selectors...');
     
     const selectors = [
       // Video transcript selectors
@@ -393,11 +385,11 @@ export class CourseraExtractor {
 
     selectors.forEach(selector => {
       const elements = document.querySelectorAll(selector);
-      console.log(`🎯 Selector "${selector}": ${elements.length} elements found`);
+      log.debug(`🎯 Selector "${selector}": ${elements.length} elements found`);
       if (elements.length > 0) {
         elements.forEach((el, i) => {
           const text = el.textContent?.substring(0, 50) || '';
-          console.log(`  Element ${i + 1}: "${text}..."`);
+          log.debug(`  Element ${i + 1}: "${text}..."`);
         });
       }
     });

@@ -6,29 +6,27 @@ import {
   Sun,
   Moon,
   Download,
-  Clipboard,
-  Play,
-  Lock,
-  Github,
+  Copy,
   AlertCircle,
-  CheckCircle,
+  Check,
+  Circle,
   Clock,
   Search,
   Loader2,
   ArrowRight,
   ChevronRight,
+  ChevronDown,
   Camera,
   ScanText,
-  Zap,
-  ChevronDown,
   Library,
   FileText,
-  Highlighter,
-  StickyNote,
+  Info,
+  ListOrdered,
   X,
+  Settings,
   Sparkles,
   RefreshCw,
-  Trash2,
+  Square,
 } from 'lucide-react';
 import {
   type BatchState,
@@ -38,7 +36,7 @@ import {
 } from '../../lib/batch-service';
 import { StorageService } from '../../lib/storage-service';
 import type { ExportFormat } from '../../lib/extension-service';
-import type { SourceMeta } from '../../lib/transcript';
+import { formatTimestamp, parseTranscript, type SourceMeta } from '../../lib/transcript';
 import {
   addLecture,
   lectureId,
@@ -48,6 +46,7 @@ import {
   type CollectedLecture,
 } from '../../lib/collection';
 import { TranscriptSearch } from '../TranscriptSearch';
+import { BrandTile } from '../BrandTile';
 import {
   allFrames,
   captureCurrentFrame,
@@ -62,7 +61,6 @@ import { searchService } from '../../lib/search-service';
 import { applyTheme, storeTheme } from '../../lib/theme';
 import { lectureActivity, setLectureComplete } from '../../lib/library-db';
 import {
-  activityCount,
   countWords,
   lectureStatus,
   STATUS_LABELS,
@@ -135,48 +133,70 @@ const debounce = (func: (...args: unknown[]) => void, wait: number) => {
   };
 };
 
-// Custom LogIcon component using actual Log.png image
-// Professional SVG Logo Component
-const TranscriptIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.89 22 5.99 22H18C19.1 22 20 21.1 20 20V8L14 2Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      fill="none"
-    />
-    <path
-      d="M14 2V8H20"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M16 13H8"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M16 17H8"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M10 9H8"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
+/** The arc spinner from the design, in the accent colour. */
+const Spinner = ({ size = 18 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="var(--te-accent)"
+    strokeWidth="2.4"
+    strokeLinecap="round"
+    className="flex-shrink-0 animate-spin"
+    aria-hidden="true"
+  >
+    <path d="M12 3a9 9 0 1 0 9 9" />
   </svg>
 );
+
+/** A labelled on/off row. The checkbox is real; the track is decoration. */
+const SwitchRow = ({
+  label,
+  hint,
+  checked,
+  onChange,
+  className = '',
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  className?: string;
+}) => (
+  <label
+    className={`flex min-h-[52px] cursor-pointer items-center gap-3 py-1.5 pl-4 pr-3.5 ${className}`}
+  >
+    <span className="flex flex-grow flex-col">
+      <span className="text-[14px] font-medium">{label}</span>
+      <span className="te-muted text-[12px]">{hint}</span>
+    </span>
+    <input
+      type="checkbox"
+      role="switch"
+      className="te-switch-input"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+    />
+    <span className="te-switch" aria-hidden="true" />
+  </label>
+);
+
+/** Display name for the platform the content script reported. */
+const PLATFORM_NAMES: Record<string, string> = {
+  udemy: 'Udemy',
+  youtube: 'YouTube',
+  coursera: 'Coursera',
+  generic: 'Web video',
+};
+
+/** `~3 min left`, from the average time per processed lecture so far. */
+const estimateTimeLeft = (state: BatchState, processed: number, total: number): string | null => {
+  if (processed === 0 || processed >= total) return null;
+  const perLecture = (Date.now() - state.startedAt) / processed;
+  const minutes = Math.round((perLecture * (total - processed)) / 60000);
+  return minutes < 1 ? 'under a minute left' : `~${minutes} min left`;
+};
 
 export const TranscriptExtractorPopup = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -230,6 +250,8 @@ export const TranscriptExtractorPopup = () => {
   );
 
   const [batchState, setBatchState] = useState<BatchState | null>(null);
+  const [unsaved, setUnsaved] = useState<CollectedLecture | null>(null);
+  const [saving, setSaving] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
   const [autoDownload, setAutoDownload] = useState<boolean>(() => {
     try {
@@ -266,24 +288,69 @@ export const TranscriptExtractorPopup = () => {
   const handleStartEntireCourse = async () => {
     try {
       const service = await getExtensionService();
-      await service.startBatchExtraction({
+      const result = await service.startBatchExtraction({
         autoDownload,
         exportFormat,
       });
+      if (!result.success) throw new Error(result.error || 'Could not start collection.');
       setBatchState(await getBatchState());
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to start collection');
+    }
+  };
+
+  const handleAutoDownloadChange = (next: boolean) => {
+    setAutoDownload(next);
+    try {
+      localStorage.setItem('batch_auto_download', next ? 'true' : 'false');
     } catch {
-      setErrorMessage('Failed to start entire course extraction');
+      // Ignore storage failures; the toggle state already changed in memory.
+    }
+    // A running batch re-reads its state from storage on every step and checks
+    // `autoDownload` when it finishes, so changing it mid-run takes effect.
+    if (batchState?.isActive) {
+      void getExtensionService().then(service => service.setBatchOptions(next)).then(result => {
+        if (!result.success) setErrorMessage(result.error || 'Could not update collection options.');
+      }).catch(() => setErrorMessage('Could not update collection options.'));
     }
   };
 
   const handleCancelBatch = async () => {
     try {
       const service = await getExtensionService();
-      await service.cancelBatchExtraction();
+      const result = await service.cancelBatchExtraction();
+      if (!result.success) throw new Error(result.error);
       setBatchState(await getBatchState());
     } catch {
       setErrorMessage('Failed to cancel course extraction');
     }
+  };
+
+  const handleResume = async (retryFailed = false) => {
+    try {
+      const result = await (await getExtensionService()).resumeBatchExtraction(retryFailed);
+      if (!result.success) throw new Error(result.error || 'Could not resume collection.');
+      setBatchState(await getBatchState());
+      setErrorMessage('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not resume collection.');
+    }
+  };
+
+  const retrySave = async () => {
+    if (!unsaved) return;
+    setSaving(true);
+    try {
+      const next = addLecture(collection, unsaved);
+      await saveCourseLecture(unsaved, next, unsaved.url, {
+        courseTitle: courseStructure?.title, instructor: courseStructure?.instructor,
+      });
+      setCollection(next);
+      setUnsaved(null);
+      setErrorMessage('');
+    } catch {
+      setErrorMessage('Transcript is extracted but not saved. Retry or download a recovery copy.');
+    } finally { setSaving(false); }
   };
 
   // Can this browser read a screenshot on its own? Checked, never assumed:
@@ -376,7 +443,6 @@ export const TranscriptExtractorPopup = () => {
   // Organising loads the 30 MB embedding model if search has not already done
   // so. Without a working state the buttons look broken for a second or two.
   const [isExporting, setIsExporting] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
 
   /**
    * Whether the user has chosen export settings during this popup session.
@@ -587,11 +653,18 @@ export const TranscriptExtractorPopup = () => {
           collectedAt: Date.now(),
         };
         const next = addLecture(collection, collected);
-        setCollection(next);
-        void saveCourseLecture(collected, next, pageUrl ?? undefined, {
+        setUnsaved(collected);
+        setSaving(true);
+        await saveCourseLecture(collected, next, pageUrl ?? undefined, {
           courseTitle: courseStructure?.title,
           instructor: courseStructure?.instructor,
         });
+
+        setCollection(next);
+        setUnsaved(null);
+        setSaving(false);
+
+        if (autoDownload) void handleExport('download', collected);
 
         try {
           const copied = await (await getExtensionService()).copyToClipboard(response.data);
@@ -606,15 +679,24 @@ export const TranscriptExtractorPopup = () => {
         setExtractionStatus('error');
       }
     } catch (error) {
-      setErrorMessage('Error extracting transcript');
+      setErrorMessage('Extraction or saving failed. If text was captured, use Retry save or Download recovery copy.');
       setExtractionStatus('error');
     } finally {
+      setSaving(false);
       setIsExtracting(false);
     }
   };
 
-  const handleExport = async (action: 'clipboard' | 'download') => {
-    if (!extractedTranscript) {
+  /**
+   * `only` exports a single lecture instead of the course collection — used by
+   * auto-download, which fires before React state has caught up with the
+   * transcript that was just extracted.
+   */
+  const handleExport = async (
+    action: 'clipboard' | 'download',
+    only?: { id: string; title: string; url?: string; transcript: string },
+  ) => {
+    if (!extractedTranscript && !only) {
       setErrorMessage('No transcript available to export');
       return;
     }
@@ -624,8 +706,9 @@ export const TranscriptExtractorPopup = () => {
     // One list, used for both the document and the screenshot archive. They
     // have to describe the same set of lectures or the images in the export
     // point at sections that are not there.
-    const exportedLectures =
-      collection.length > 0
+    const exportedLectures = only
+      ? [only]
+      : collection.length > 0
         ? collection
         : [
             {
@@ -907,7 +990,7 @@ export const TranscriptExtractorPopup = () => {
     return total > 0 ? total : null;
   }, [courseStructure]);
 
-  const isBusy = isExtracting || isNavigating || Boolean(batchState?.isActive);
+  const isBusy = isExtracting || isNavigating || Boolean(batchState?.isActive && !batchState.isPaused);
   const batchProgress = useMemo(() => getBatchProgress(batchState), [batchState]);
   const isDone = extractionStatus === 'success' && Boolean(extractedTranscript);
 
@@ -957,278 +1040,6 @@ export const TranscriptExtractorPopup = () => {
   const isBlocked =
     !isBusy && !isDone && (!availability?.hasTranscript || extractionStatus === 'error');
 
-  const renderExtractSection = () => (
-    <div className="space-y-3">
-      {/* What we are looking at. Secondary information, so it reads quietly. */}
-      {currentVideo && (
-        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-3">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
-              <Play className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="text-[13px] font-semibold text-slate-900 dark:text-white leading-snug line-clamp-2">
-                {currentVideo.title}
-              </h2>
-              <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-                <span className="inline-flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  {currentVideo.duration}
-                </span>
-                {/* One statement about the transcript, not two.
-                    This used to show "Transcript available" from the page's
-                    point of view directly above a button offering to extract
-                    it — the same word meaning "the site has one" and "we have
-                    one". Capture state wins, because that is the thing the
-                    reader is actually deciding about. */}
-                {isDone ? (
-                  <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle className="w-3 h-3" />
-                    Captured · {transcriptWords.toLocaleString()} words
-                  </span>
-                ) : isExtracting ? (
-                  <span className="inline-flex items-center gap-1 font-medium text-blue-600 dark:text-blue-400">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Extracting…
-                  </span>
-                ) : availability?.hasTranscript ? (
-                  <span className="inline-flex items-center gap-1 font-medium text-slate-500 dark:text-slate-400">
-                    <FileText className="w-3 h-3" />
-                    Ready to extract
-                  </span>
-                ) : availability ? (
-                  <span className="inline-flex items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
-                    <AlertCircle className="w-3 h-3" />
-                    No transcript on this page
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {errorMessage && (
-        <div className="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 px-3 py-2.5">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-px" />
-            <p className="text-[12px] leading-relaxed text-amber-900 dark:text-amber-200">
-              {errorMessage}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Active Batch Extraction Progress Card */}
-      {batchState?.isActive && (
-        <div className="rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/40 p-3.5 space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-blue-700 dark:text-blue-300">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Extracting Entire Course
-            </span>
-            <span className="text-[11px] font-semibold tabular-nums text-blue-600 dark:text-blue-400">
-              {batchProgress.completed}
-              {batchProgress.skipped > 0 ? ` (+${batchProgress.skipped} skipped)` : ''}/{batchProgress.total} ({batchProgress.percent}%)
-            </span>
-          </div>
-
-          <div className="w-full bg-blue-200/80 dark:bg-blue-900/80 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${batchProgress.percent}%` }}
-            />
-          </div>
-
-          <div className="text-[11px] text-slate-600 dark:text-slate-400 truncate">
-            {batchState.currentIndex < batchState.items.length
-              ? `Lecture ${batchState.currentIndex + 1}/${batchState.items.length}: ${batchState.items[batchState.currentIndex]?.title || 'Processing…'}`
-              : 'Finishing extraction…'}
-          </div>
-
-          {batchProgress.skipped > 0 && (
-            <div className="pt-1.5 border-t border-blue-200/60 dark:border-blue-900/40">
-              <button
-                type="button"
-                onClick={() => setShowSkipped(!showSkipped)}
-                className="w-full flex items-center justify-between text-[11px] text-amber-700 dark:text-amber-400 font-medium hover:underline"
-              >
-                <span>⚠️ {batchProgress.skipped} lectures skipped</span>
-                <span>{showSkipped ? '▲ Hide' : '▼ View reasons'}</span>
-              </button>
-              {showSkipped && (
-                <div className="mt-1.5 max-h-36 overflow-y-auto space-y-1 pr-0.5 text-[10px]">
-                  {batchState.items
-                    .filter((item) => item.status === 'skipped')
-                    .map((item) => (
-                      <div
-                        key={item.id}
-                        className="p-1.5 rounded bg-white/90 dark:bg-slate-900/90 border border-amber-200/70 dark:border-amber-900/70 flex flex-col gap-0.5"
-                      >
-                        <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
-                          {item.title}
-                        </span>
-                        <span className="text-amber-600 dark:text-amber-400">
-                          {item.error || 'No captions available'}
-                        </span>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          <button
-            onClick={handleCancelBatch}
-            className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-200 dark:border-red-900/80 bg-red-50 dark:bg-red-950/30 px-3 py-1.5 text-[11px] font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
-          >
-            Cancel extraction
-          </button>
-        </div>
-      )}
-
-      {/* Completed Batch Summary Card (shows if skipped items exist) */}
-      {!batchState?.isActive && batchState && batchProgress.skipped > 0 && (
-        <div className="rounded-xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/70 dark:bg-amber-950/40 p-3 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">
-              Batch: {batchProgress.completed} extracted, {batchProgress.skipped} skipped
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowSkipped(!showSkipped)}
-              className="text-[11px] font-medium text-amber-700 dark:text-amber-400 hover:underline"
-            >
-              {showSkipped ? '▲ Hide' : '▼ View reasons'}
-            </button>
-          </div>
-          {showSkipped && (
-            <div className="max-h-36 overflow-y-auto space-y-1 pr-0.5 text-[10px]">
-              {batchState.items
-                .filter((item) => item.status === 'skipped')
-                .map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-1.5 rounded bg-white/90 dark:bg-slate-900/90 border border-amber-200/70 dark:border-amber-900/70 flex flex-col gap-0.5"
-                  >
-                    <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
-                      {item.title}
-                    </span>
-                    <span className="text-amber-600 dark:text-amber-400">
-                      {item.error || 'No captions available'}
-                    </span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Action buttons */}
-      {!batchState?.isActive && (
-        <div className="space-y-2">
-          <button
-            onClick={isDone ? handleNextLecture : handleExtractTranscript}
-            disabled={isBusy}
-            className={`w-full inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-semibold transition-colors ${
-              isBusy
-                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-wait'
-                : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white'
-            }`}
-          >
-            {isExtracting || isNavigating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {isExtracting ? 'Extracting…' : 'Loading next lecture…'}
-              </>
-            ) : isDone ? (
-              <>
-                <ArrowRight className="w-4 h-4" />
-                Next lecture
-              </>
-            ) : isBlocked ? (
-              <>
-                <RefreshCw className="w-4 h-4" />
-                Retry extraction
-              </>
-            ) : (
-              <>
-                <TranscriptIcon className="w-4 h-4" />
-                Extract transcript
-              </>
-            )}
-          </button>
-
-          {/* When done, provide Re-extract and Delete buttons */}
-          {isDone && !isBusy && (
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={handleExtractTranscript}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-[12px] font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Re-extract
-              </button>
-              <button
-                onClick={handleDeleteCurrentLecture}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20 px-3 py-2 text-[12px] font-medium text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Delete
-              </button>
-            </div>
-          )}
-
-          {/* Skip button when not done */}
-          {!isBusy && !isDone && (
-            <button
-              onClick={handleNextLecture}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            >
-              Skip to next lecture
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          {/* Extract Entire Course button */}
-          {!isBusy && availability?.isCoursePage && (
-            <div className="space-y-1.5 pt-0.5">
-              <button
-                onClick={handleStartEntireCourse}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-4 py-2.5 text-[12px] font-semibold transition-colors shadow-sm"
-              >
-                <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                Extract Entire Course
-                {totalLectures ? (
-                  <span className="text-[10px] bg-blue-200 dark:bg-blue-900 px-1.5 py-0.5 rounded-full font-medium">
-                    {totalLectures} lectures
-                  </span>
-                ) : null}
-              </button>
-
-              <label className="flex items-center gap-2 cursor-pointer select-none px-1 text-[11px] text-slate-500 dark:text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={autoDownload}
-                  onChange={(e) => {
-                    setAutoDownload(e.target.checked);
-                    try {
-                      localStorage.setItem('batch_auto_download', e.target.checked ? 'true' : 'false');
-                    } catch {
-                      // Ignore storage failures; the checkbox state already changed in memory.
-                    }
-                  }}
-                  className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                />
-                <span>Auto-download file when finished</span>
-              </label>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-
   /** Open the library in a tab, reusing one if it is already open. */
   const openDashboard = () => {
     if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) return;
@@ -1237,114 +1048,703 @@ export const TranscriptExtractorPopup = () => {
     else window.open(url, '_blank');
   };
 
-  const dropLecture = async (id: string) => {
-    setCollection(await removeCourseLecture(id, collection, pageUrl ?? undefined));
+  const sourceMeta: SourceMeta = {
+    title: currentVideo?.title,
+    url: pageUrl ?? undefined,
+    platform: toPlatform(availability?.platform),
+    courseTitle: courseStructure?.title,
+    instructor: courseStructure?.instructor,
   };
 
-  /** What has been gathered so far, and a way to prune it. */
-  const renderCollectionSection = () => {
-    if (collection.length === 0) return null;
+  // Export settings live behind the gear, not on the main screen: they are
+  // chosen once and then left alone, and the design keeps the popup to the
+  // one decision that matters per lecture.
+  const [view, setView] = useState<'main' | 'settings'>('main');
+
+  /** The first few cues, for the preview on the "ready" screen. */
+  const previewCues = useMemo(
+    () => (isDone ? parseTranscript(extractedTranscript).slice(0, 3) : []),
+    [isDone, extractedTranscript],
+  );
+  const lineCount = useMemo(
+    () => (isDone ? parseTranscript(extractedTranscript).length : 0),
+    [isDone, extractedTranscript],
+  );
+
+  const platformName = availability ? PLATFORM_NAMES[availability.platform] : undefined;
+
+  /* ------------------------------------------------------------------------ */
+  /* Pieces shared between states                                             */
+  /* ------------------------------------------------------------------------ */
+
+  const renderHeader = () => (
+    <header className="flex items-center gap-2.5 pb-1.5 pl-4 pr-3 pt-3.5">
+      <BrandTile />
+      <div className="flex min-w-0 flex-grow flex-col gap-px">
+        <h1 className="truncate text-[15px] font-semibold tracking-[-0.01em]">
+          Transcript Extractor
+        </h1>
+        <p className="te-muted flex items-center gap-1.5 text-[12px]">
+          <span
+            className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+            style={{ background: 'var(--te-success)' }}
+            aria-hidden="true"
+          />
+          <span className="truncate">Runs locally · nothing leaves your browser</span>
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={handleThemeToggle}
+        className="te-icon-btn"
+        aria-label={isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'}
+      >
+        {isDarkMode ? (
+          <Sun className="h-[17px] w-[17px]" strokeWidth={1.8} />
+        ) : (
+          <Moon className="h-[17px] w-[17px]" strokeWidth={1.8} />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => setView(view === 'settings' ? 'main' : 'settings')}
+        className="te-icon-btn"
+        aria-label={view === 'settings' ? 'Close settings' : 'Settings'}
+        aria-pressed={view === 'settings'}
+      >
+        {view === 'settings' ? (
+          <X className="h-[17px] w-[17px]" strokeWidth={1.8} />
+        ) : (
+          <Settings className="h-[17px] w-[17px]" strokeWidth={1.8} />
+        )}
+      </button>
+    </header>
+  );
+
+  const renderError = () =>
+    errorMessage ? (
+      <div className="te-note te-note--warn" role="alert">
+        <AlertCircle className="mt-px h-3.5 w-3.5 flex-shrink-0" />
+        <span>{errorMessage}</span>
+      </div>
+    ) : null;
+
+  /** What we are looking at. `withStatus` adds the captions pill. */
+  const renderLectureCard = (withStatus: boolean) => {
+    if (!currentVideo && !availability) return null;
 
     return (
-      // A flat section rather than a card. This sits inside the popup's own
-      // frame already; a bordered box around it is a card inside a card.
-      <section>
-        <div className="flex items-baseline justify-between gap-2 mb-1.5">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-            Course progress
-          </h3>
-          <span className="text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+      <div className="te-glass flex flex-col gap-1.5 px-4 py-3.5">
+        <div className="te-kicker">{currentVideo ? 'This lecture' : 'This page'}</div>
+        <div className="line-clamp-2 text-[16px] font-semibold leading-[1.3] tracking-[-0.01em]">
+          {currentVideo?.title ??
+            (availability?.hasTranscript ? 'Video with captions' : 'No supported video found')}
+        </div>
+        <div className="flex items-center gap-3 text-[12px]" style={{ color: 'var(--te-text-2)' }}>
+          {platformName && <span>{platformName}</span>}
+          {currentVideo?.duration && (
+            <span className="te-mono flex items-center gap-1">
+              <Clock className="h-[13px] w-[13px]" />
+              {currentVideo.duration}
+            </span>
+          )}
+          {withStatus && availability && (
+            <span className="ml-auto">
+              {availability.hasTranscript ? (
+                <span className="te-pill te-pill--ok">
+                  <Check className="h-3 w-3" strokeWidth={2.4} />
+                  Captions found
+                </span>
+              ) : (
+                <span className="te-pill te-pill--warn">
+                  <AlertCircle className="h-3 w-3" />
+                  No captions
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderLibraryLink = (title: string, hint: string) => (
+    <button
+      type="button"
+      onClick={openDashboard}
+      className="te-glass te-row-link mt-auto flex-shrink-0"
+    >
+      <span className="te-badge">
+        <Library className="h-[18px] w-[18px]" strokeWidth={1.9} />
+      </span>
+      <span className="flex min-w-0 flex-grow flex-col">
+        <span className="font-semibold">{title}</span>
+        <span className="te-muted truncate text-[12px]">{hint}</span>
+      </span>
+      <ChevronRight className="h-[18px] w-[18px] flex-shrink-0" style={{ color: 'var(--te-text-4)' }} />
+    </button>
+  );
+
+  /** Lectures gathered for this course so far, and a one-file export of them. */
+  const renderCollectionCard = () => {
+    if (collection.length < 2) return null;
+    const percent =
+      totalLectures !== null ? Math.min(100, Math.round((collection.length / totalLectures) * 100)) : null;
+
+    return (
+      <div className="te-glass flex flex-col gap-2.5 px-4 py-3.5">
+        <div className="flex items-baseline gap-2">
+          <span className="te-kicker flex-grow">This course</span>
+          <span className="te-mono te-muted text-[12px]">
             {totalWords(collection).toLocaleString()} words
           </span>
         </div>
-
-        {/* A bar only when the denominator is real; otherwise a plain count,
-            which is honest about not knowing how long the course is. */}
-        {totalLectures !== null ? (
-          <>
-            <div className="flex items-baseline justify-between gap-2 mb-1">
-              <span className="text-[12px] font-semibold text-slate-700 dark:text-slate-200 tabular-nums">
-                {collection.length} / {totalLectures} lectures
-              </span>
-              <span className="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">
-                {Math.round((collection.length / totalLectures) * 100)}%
-              </span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700 mb-2">
-              <div
-                className="h-full rounded-full bg-blue-600 transition-all"
-                style={{
-                  width: `${Math.min(100, (collection.length / totalLectures) * 100)}%`,
-                }}
-              />
-            </div>
-          </>
-        ) : (
-          <p className="text-[12px] font-semibold text-slate-700 dark:text-slate-200 tabular-nums mb-2">
-            {collection.length} {collection.length === 1 ? 'lecture' : 'lectures'} collected
-          </p>
+        <div className="flex items-baseline gap-2">
+          <span className="te-mono text-[20px] font-semibold">{collection.length}</span>
+          <span style={{ color: 'var(--te-text-2)' }}>
+            {totalLectures !== null ? `of ${totalLectures} lectures collected` : 'lectures collected'}
+          </span>
+          {percent !== null && (
+            <span className="te-mono te-muted ml-auto text-[12px]">{percent}%</span>
+          )}
+        </div>
+        {percent !== null && (
+          <div className="te-progress">
+            <div style={{ width: `${percent}%` }} />
+          </div>
         )}
+        <button
+          type="button"
+          onClick={() => void handleDownloadAllCombined()}
+          disabled={isExporting}
+          className="te-btn h-10 text-[13px]"
+        >
+          <Download className="h-4 w-4" strokeWidth={1.9} />
+          Download all {collection.length} in one file
+        </button>
+      </div>
+    );
+  };
 
-        <ul className="space-y-0.5 max-h-32 overflow-y-auto -mx-1">
-          {collection.map((lecture, i) => (
-            <li
-              key={lecture.id}
-              className="group flex items-center gap-2.5 rounded-lg px-1 py-1 hover:bg-white dark:hover:bg-slate-800 transition-colors"
-            >
-              <span className="flex-shrink-0 w-5 h-5 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[10px] font-semibold tabular-nums text-slate-500 dark:text-slate-400 flex items-center justify-center">
-                {i + 1}
-              </span>
-              <span className="flex-1 min-w-0 truncate text-[12px] text-slate-700 dark:text-slate-200">
-                {lecture.title}
-              </span>
+  /** Lectures a finished batch could not extract, and why. */
+  const renderSkippedSummary = () => {
+    if (!batchState || batchState.isActive || (batchProgress.skipped === 0 && batchProgress.failed === 0)) return null;
+    return (
+      <div className="te-glass flex flex-col gap-2 px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setShowSkipped(!showSkipped)}
+          aria-expanded={showSkipped}
+          className="flex items-center gap-2 text-left text-[13px]"
+        >
+          <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--te-warn)' }} />
+          <span className="flex-grow">
+            Last course run: {batchProgress.completed} saved, {batchProgress.skipped} skipped, {batchProgress.failed} failed
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 flex-shrink-0 transition-transform ${showSkipped ? 'rotate-180' : ''}`}
+          />
+        </button>
+        {showSkipped && (
+          <ul className="flex max-h-32 flex-col gap-1.5 overflow-y-auto text-[12px]">
+            {batchState.items
+              .filter((item) => item.status === 'skipped' || item.status === 'failed')
+              .map((item) => (
+                <li key={item.id} className="flex flex-col">
+                  <span className="truncate font-medium">{item.title}</span>
+                  <span style={{ color: 'var(--te-warn-text)' }}>
+                    {item.error || 'No captions available'}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
+
+  /** Stills: capture, read with on-device AI, inspect, remove. */
+  const renderVisualNotes = () => (
+    <div className="flex flex-col gap-2 pb-3.5 pl-4 pr-3.5 pt-3">
+      <div className="flex items-center gap-2">
+        <span className="flex flex-grow flex-col">
+          <span className="text-[14px] font-medium">
+            Visual notes <span className="te-muted font-normal">· {frames.length}</span>
+          </span>
+          <span className="te-muted text-[12px]">
+            Capture diagrams and code; exported with the transcript
+          </span>
+        </span>
+        {/* Only offered when the model is installed, so the button is never a
+            promise this machine cannot keep. */}
+        {aiProbe?.ready && unreadFrames.length > 0 && (
+          <button
+            type="button"
+            onClick={handleReadFrames}
+            disabled={isReadingFrames}
+            className="te-chip-btn te-chip-btn--neutral"
+          >
+            {isReadingFrames ? <Spinner size={15} /> : <ScanText className="h-[15px] w-[15px]" />}
+            {isReadingFrames && readProgress
+              ? `${readProgress.done}/${readProgress.total}`
+              : `Read ${unreadFrames.length}`}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleCaptureFrame}
+          disabled={isCapturing}
+          className="te-chip-btn"
+        >
+          {isCapturing ? <Spinner size={15} /> : <Camera className="h-[15px] w-[15px]" strokeWidth={1.9} />}
+          Capture
+        </button>
+      </div>
+
+      {captureNote && (
+        <p
+          className="text-[12px]"
+          style={{ color: captureNote.tone === 'ok' ? 'var(--te-success-text)' : 'var(--te-warn-text)' }}
+        >
+          {captureNote.text}
+        </p>
+      )}
+
+      {frames.length > 0 && (
+        <ul className="flex gap-2 overflow-x-auto pb-1">
+          {frames.map((frame) => (
+            <li key={frame.seconds} className="group relative shrink-0">
               <button
-                onClick={() => void dropLecture(lecture.id)}
-                className="flex-shrink-0 p-1 rounded-md opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 transition"
-                aria-label={`Remove ${lecture.title}`}
-                title={`Remove ${lecture.title}`}
+                type="button"
+                onClick={() => setOpenFrame(openFrame === frame.seconds ? null : frame.seconds)}
+                aria-label={`Inspect frame at ${formatClockLabel(frame.seconds)}`}
+                aria-pressed={openFrame === frame.seconds}
+                className="block"
               >
-                <X className="w-3.5 h-3.5" />
+                <img
+                  src={frame.dataUrl}
+                  alt=""
+                  className="h-14 w-auto rounded-lg"
+                  style={{
+                    border: `1px solid ${openFrame === frame.seconds ? 'var(--te-accent)' : 'var(--te-divider)'}`,
+                  }}
+                />
+              </button>
+              <span className="te-mono absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[9px] text-white">
+                {formatClockLabel(frame.seconds)}
+              </span>
+              {frame.readout ? (
+                <span className="pointer-events-none absolute left-1 top-1 rounded bg-emerald-700/90 px-1 text-[9px] font-semibold text-white">
+                  text
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => handleDeleteFrame(frame.seconds)}
+                aria-label={`Remove frame at ${formatClockLabel(frame.seconds)}`}
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-neutral-800 p-0.5 text-white opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+              >
+                <X className="h-3 w-3" />
               </button>
             </li>
           ))}
         </ul>
+      )}
 
-        <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-          Exports cover every lecture above.
-        </p>
-
-        <div className="pt-2">
-          <button
-            onClick={() => void handleDownloadAllCombined()}
-            disabled={isExporting}
-            className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-[12px] font-semibold transition-colors shadow-sm disabled:opacity-50"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Download all {collection.length} transcripts in 1 file
-          </button>
+      {/* What the model actually read, in full — the only way to judge
+          whether a transcription is good enough to keep. */}
+      {inspected && (
+        <div className="te-note flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="te-kicker flex-grow">On screen at {formatClockLabel(inspected.seconds)}</span>
+            <button type="button" onClick={() => setOpenFrame(null)} aria-label="Close frame text">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {inspected.readout === undefined ? (
+            <span>
+              {aiProbe?.ready
+                ? 'Not read yet. Use Read to transcribe it.'
+                : 'Not read. On-device AI is not available on this machine.'}
+            </span>
+          ) : inspected.readout === '' ? (
+            <span>Read, but nothing legible was on screen.</span>
+          ) : (
+            <pre className="te-mono max-h-32 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed">
+              {inspected.readout}
+            </pre>
+          )}
         </div>
-      </section>
+      )}
+
+      {/* Whether this browser can read text off a screenshot. Reported, never
+          assumed; nothing is downloaded without a click (~4 GB). */}
+      {(aiProbe?.status === 'downloadable' || aiProbe?.status === 'downloading') && (
+        <div className="te-note flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
+            <span className="flex-grow">Read text off screenshots with Chrome's on-device model.</span>
+            <button
+              type="button"
+              onClick={handleInstallModel}
+              disabled={isInstallingModel}
+              className="font-semibold"
+              style={{ color: 'var(--te-accent-text)' }}
+            >
+              {isInstallingModel ? 'Installing…' : 'Install (~4 GB)'}
+            </button>
+          </div>
+          {isInstallingModel && (
+            <div className={`te-progress h-1 ${installProgress === null ? 'te-progress--indeterminate' : ''}`}>
+              <div
+                style={
+                  installProgress === null ? undefined : { width: `${Math.round(installProgress * 100)}%` }
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
+      {(aiProbe?.status === 'unavailable' || aiProbe?.status === 'unsupported') && (
+        <div className="te-note">
+          <Info className="mt-px h-3.5 w-3.5 flex-shrink-0" />
+          <span>Auto-descriptions off: {aiProbe.detail}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  /* ------------------------------------------------------------------------ */
+  /* States                                                                   */
+  /* ------------------------------------------------------------------------ */
+
+  /** 1 · Ready to extract (also: no captions, failed, loading next). */
+  const renderReady = () => (
+    <>
+      {renderLectureCard(true)}
+      {renderError()}
+
+      <button
+        type="button"
+        onClick={handleExtractTranscript}
+        disabled={isBusy || !availability}
+        className="te-btn-primary flex-shrink-0"
+      >
+        {isNavigating ? (
+          <>
+            <Loader2 className="h-[18px] w-[18px] animate-spin" />
+            Loading next lecture…
+          </>
+        ) : isBlocked ? (
+          <>
+            <RefreshCw className="h-[18px] w-[18px]" />
+            Retry extraction
+          </>
+        ) : (
+          <>
+            <FileText className="h-[18px] w-[18px]" />
+            Extract transcript
+          </>
+        )}
+      </button>
+
+      <div className="flex flex-shrink-0 gap-2">
+        {availability?.isCoursePage && (
+          <button
+            type="button"
+            onClick={handleStartEntireCourse}
+            disabled={isBusy}
+            className="te-btn flex-grow"
+          >
+            <ListOrdered className="h-4 w-4" strokeWidth={1.9} />
+            Extract whole course
+            {totalLectures ? <span className="te-mono te-muted text-[12px]">{totalLectures}</span> : null}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleNextLecture}
+          disabled={isBusy}
+          className={`te-btn ${availability?.isCoursePage ? '' : 'flex-grow'}`}
+        >
+          Next
+          <ArrowRight className="h-4 w-4" strokeWidth={1.9} />
+        </button>
+      </div>
+
+      {renderSkippedSummary()}
+
+      <div className="te-glass te-divide flex flex-shrink-0 flex-col">
+        <SwitchRow
+          label="Auto-download"
+          hint="Save the file when extraction finishes"
+          checked={autoDownload}
+          onChange={handleAutoDownloadChange}
+        />
+        {renderVisualNotes()}
+      </div>
+
+      {renderCollectionCard()}
+      {renderLibraryLink('Library', 'Read, search and annotate your transcripts')}
+    </>
+  );
+
+  /** 2 · Extracting one lecture. */
+  const renderExtracting = () => (
+    <>
+      {renderLectureCard(false)}
+
+      <div role="status" className="te-glass te-glass--strong flex flex-col gap-3 p-4">
+        <div className="flex items-center gap-2.5">
+          <Spinner />
+          <span className="flex-grow font-semibold">Extracting transcript…</span>
+        </div>
+        <div className="te-progress te-progress--indeterminate">
+          <div />
+        </div>
+        <div className="text-[12px]" style={{ color: 'var(--te-text-2)' }}>
+          Reading captions{currentVideo?.duration ? ` · ${currentVideo.duration} of video` : ''}
+        </div>
+      </div>
+
+      <div className="te-glass flex-shrink-0">
+        <SwitchRow
+          label="Auto-download"
+          hint="Save the file when extraction finishes"
+          checked={autoDownload}
+          onChange={handleAutoDownloadChange}
+        />
+      </div>
+
+      <p className="te-muted px-1 text-[12px]">
+        Keep this popup open until the transcript is ready.
+      </p>
+    </>
+  );
+
+  /** 3 · Transcript ready. */
+  const renderDone = () => (
+    <>
+      <div className="flex items-center gap-2.5 px-1 py-0.5">
+        <span
+          className="flex h-[30px] w-[30px] flex-shrink-0 items-center justify-center rounded-full text-white"
+          style={{
+            background: 'var(--te-success)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.3), 0 4px 12px rgba(30,158,74,0.35)',
+          }}
+          aria-hidden="true"
+        >
+          <Check className="h-4 w-4" strokeWidth={2.6} />
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="font-semibold">Transcript ready</span>
+          <span className="te-muted truncate text-[12px]">
+            {currentVideo?.title ? `${currentVideo.title} · ` : ''}saved to Library
+          </span>
+        </span>
+      </div>
+
+      {renderError()}
+
+      <div className="te-glass flex-shrink-0 overflow-hidden">
+        <div className="flex flex-col gap-2.5 px-4 py-3.5 text-[13px]">
+          {previewCues.map((cue, i) => (
+            <div key={i} className="flex gap-2.5">
+              {cue.startSeconds !== null && (
+                <span className="te-mono flex-shrink-0 text-[12px]" style={{ color: 'var(--te-accent-text)' }}>
+                  {formatTimestamp(cue.startSeconds)}
+                </span>
+              )}
+              <span className="line-clamp-2">{cue.text}</span>
+            </div>
+          ))}
+        </div>
+        <div
+          className="flex items-center gap-3 px-4 py-2.5 text-[12px]"
+          style={{ borderTop: '1px solid var(--te-divider)', color: 'var(--te-text-2)' }}
+        >
+          <span>{lineCount.toLocaleString()} lines</span>
+          <span>{transcriptWords.toLocaleString()} words</span>
+          {frames.length > 0 && (
+            <span>
+              {frames.length} visual {frames.length === 1 ? 'note' : 'notes'}
+            </span>
+          )}
+          {activity && (
+            <button
+              type="button"
+              onClick={() => void toggleComplete()}
+              className="ml-auto font-medium"
+              style={{ color: activity.completedAt === undefined ? 'var(--te-accent-text)' : 'var(--te-success-text)' }}
+            >
+              {activity.completedAt === undefined ? 'Mark done' : `✓ ${STATUS_LABELS[lectureStatus(activity)]}`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid flex-shrink-0 grid-cols-2 gap-2">
+        <button type="button" onClick={() => handleExport('clipboard')} disabled={isExporting} className="te-btn">
+          {isExporting ? <Spinner size={16} /> : <Copy className="h-4 w-4" strokeWidth={1.9} />}
+          Copy text
+        </button>
+        <button type="button" onClick={() => handleExport('download')} disabled={isExporting} className="te-btn">
+          {isExporting ? <Spinner size={16} /> : <Download className="h-4 w-4" strokeWidth={1.9} />}
+          Download
+        </button>
+      </div>
+
+      <div className="-mt-1 flex items-center gap-1 px-1 text-[12px]">
+        <button type="button" onClick={() => setView('settings')} className="te-muted hover:underline">
+          As {FORMAT_LABELS[exportFormat]}
+        </button>
+        <span className="te-muted" aria-hidden="true">·</span>
+        <button type="button" onClick={() => setShowSearch(true)} className="te-muted hover:underline">
+          Search
+        </button>
+        <span className="te-muted" aria-hidden="true">·</span>
+        <button type="button" onClick={handleExtractTranscript} className="te-muted hover:underline">
+          Re-extract
+        </button>
+        <span className="te-muted" aria-hidden="true">·</span>
+        <button type="button" onClick={handleDeleteCurrentLecture} className="te-muted hover:underline">
+          Delete
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={handleNextLecture}
+        disabled={isBusy}
+        className="te-btn-primary flex-shrink-0"
+      >
+        {isNavigating ? (
+          <>
+            <Loader2 className="h-[18px] w-[18px] animate-spin" />
+            Loading next lecture…
+          </>
+        ) : (
+          <>
+            Extract next lecture
+            <ArrowRight className="h-[18px] w-[18px]" />
+          </>
+        )}
+      </button>
+
+      {renderCollectionCard()}
+      {renderLibraryLink('Open in Library', 'Annotate, search and export')}
+    </>
+  );
+
+  /** 4 · Whole course running in the background. */
+  const renderCourse = () => {
+    if (!batchState) return null;
+    const processed = batchProgress.completed + batchProgress.skipped + batchProgress.failed;
+    const current = Math.min(batchState.currentIndex + 1, batchProgress.total);
+    const timeLeft = estimateTimeLeft(batchState, processed, batchProgress.total);
+    // A window around the lecture being worked on: two behind, two ahead.
+    const start = Math.max(0, Math.min(batchState.currentIndex - 2, batchState.items.length - 5));
+    const visible = batchState.items.slice(start, start + 5);
+
+    return (
+      <>
+        <div role="status" className="te-glass te-glass--strong flex flex-col gap-2.5 px-4 py-3.5">
+          <div className="te-kicker">Extracting whole course</div>
+          <div className="flex items-baseline gap-2">
+            <span className="te-mono text-[24px] font-semibold">{current}</span>
+            <span style={{ color: 'var(--te-text-2)' }}>of {batchProgress.total} lectures</span>
+            {timeLeft && (
+              <span className="ml-auto text-[12px]" style={{ color: 'var(--te-text-2)' }}>
+                {timeLeft}
+              </span>
+            )}
+          </div>
+          <div className="te-progress">
+            <div style={{ width: `${batchProgress.percent}%` }} />
+          </div>
+          {batchProgress.skipped > 0 && (
+            <div className="text-[12px]" style={{ color: 'var(--te-warn-text)' }}>
+              {batchProgress.skipped} skipped so far
+            </div>
+          )}
+        </div>
+
+        <ol className="te-glass te-divide m-0 flex flex-shrink-0 list-none flex-col overflow-hidden p-0">
+          {visible.map((item, offset) => {
+            const index = start + offset;
+            const active = item.status === 'extracting' || index === batchState.currentIndex;
+            return (
+              <li
+                key={item.id}
+                className="flex items-center gap-2.5 px-4 py-[11px] text-[13px]"
+                style={
+                  active && item.status !== 'completed' && item.status !== 'skipped'
+                    ? { background: 'var(--te-accent-soft)', fontWeight: 500 }
+                    : { color: item.status === 'pending' ? 'var(--te-text-3)' : 'var(--te-text-2)' }
+                }
+              >
+                {item.status === 'completed' ? (
+                  <Check className="h-4 w-4 flex-shrink-0" strokeWidth={2.4} style={{ color: 'var(--te-success)' }} />
+                ) : item.status === 'skipped' || item.status === 'failed' ? (
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--te-warn)' }} />
+                ) : active ? (
+                  <Spinner size={16} />
+                ) : (
+                  <Circle className="h-4 w-4 flex-shrink-0" style={{ color: 'var(--te-text-4)' }} />
+                )}
+                <span className="te-mono w-[22px] flex-shrink-0 text-[12px]">{index + 1}</span>
+                <span className="min-w-0 flex-grow truncate">{item.title}</span>
+                {(item.status === 'skipped' || item.status === 'failed') && (
+                  <span
+                    className="max-w-[40%] flex-shrink-0 truncate text-[12px]"
+                    style={{ color: 'var(--te-warn-text)' }}
+                    title={item.error}
+                  >
+                    {item.status === 'failed' ? 'Failed' : 'No captions · skipped'}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="te-glass flex-shrink-0">
+          <SwitchRow
+            label="Combined download"
+            hint="One file for the whole course when finished"
+            checked={batchState.autoDownload}
+            onChange={handleAutoDownloadChange}
+          />
+        </div>
+
+        <div className="mt-auto flex flex-shrink-0 flex-col gap-2">
+          <button type="button" onClick={handleCancelBatch} className="te-btn w-full">
+            <Square className="h-3.5 w-3.5" strokeWidth={2.2} />
+            Stop
+          </button>
+          <p className="te-muted px-1 text-center text-[12px]">
+            You can close this popup — the course keeps extracting in the background.
+          </p>
+        </div>
+      </>
     );
   };
 
-  // Render helper, not a component (see renderExtractSection).
-  const renderExportOptionsSection = () => (
-    <div className="space-y-4 pt-1">
-      <div>
-        <label
-          htmlFor="export-format"
-          className="block text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500 mb-1.5"
-        >
+  /** Export settings. */
+  const renderSettings = () => (
+    <>
+      <div className="te-glass flex flex-col gap-2 px-4 py-3.5">
+        <label htmlFor="export-format" className="te-kicker">
           Export as
         </label>
         <select
           id="export-format"
           value={exportFormat}
-          onChange={e => {
+          onChange={(e) => {
             userChoseSettings.current = true;
             setExportFormat(e.target.value as ExportFormat);
           }}
-          className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] text-slate-900 dark:text-white outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25 transition"
+          className="te-select"
         >
           <optgroup label="Reading and AI tools">
             <option value="markdown">Markdown (.md)</option>
@@ -1367,79 +1767,50 @@ export const TranscriptExtractorPopup = () => {
             <option value="json">JSON (.json)</option>
           </optgroup>
         </select>
-        <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {FORMAT_HINTS[exportFormat]}
-        </p>
+        <p className="te-muted text-[12px]">{FORMAT_HINTS[exportFormat]}</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => handleExport('clipboard')}
-          disabled={isExporting}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors"
-        >
-          {isExporting ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Clipboard className="w-3.5 h-3.5" />
-          )}
-          {isExporting ? 'Organising…' : 'Copy'}
-        </button>
-        <button
-          onClick={() => handleExport('download')}
-          disabled={isExporting}
-          className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors"
-        >
-          {isExporting ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Download className="w-3.5 h-3.5" />
-          )}
-          {isExporting ? 'Organising…' : 'Download'}
-        </button>
+      <div className="te-glass te-divide flex flex-col">
+        <SwitchRow
+          label="Timestamps"
+          hint="Keep [mm:ss] markers in exported text"
+          checked={includeTimestamps}
+          onChange={(next) => {
+            userChoseSettings.current = true;
+            setIncludeTimestamps(next);
+          }}
+        />
+        <SwitchRow
+          label="Auto-download"
+          hint="Save the file when extraction finishes"
+          checked={autoDownload}
+          onChange={handleAutoDownloadChange}
+        />
       </div>
 
-      <button
-        onClick={() => void handleDownloadAllCombined()}
-        disabled={isExporting || (!extractedTranscript && collection.length === 0)}
-        className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-blue-200 dark:border-blue-800/80 bg-blue-50/70 dark:bg-blue-950/40 px-3 py-2 text-[12px] font-semibold text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/60 disabled:opacity-50 transition-colors"
-        title="Download all transcripts combined into 1 file named with the segment titles"
-      >
-        <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-        Download all transcripts in 1 file
-      </button>
-
-      <button
-        onClick={() => setShowSearch(true)}
-        className="w-full inline-flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors group"
-      >
-        <span className="flex items-center gap-2">
-          <Search className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-          <span>
-            <span className="block text-[13px] font-semibold text-slate-900 dark:text-white">
-              Search this lecture
-            </span>
-            <span className="block text-[11px] text-slate-500 dark:text-slate-400">
-              Chapters, key concepts, jump to a moment
-            </span>
+      {hasAnything && (
+        <button type="button" onClick={() => setShowSearch(true)} className="te-glass te-row-link">
+          <span className="te-badge">
+            <Search className="h-[18px] w-[18px]" strokeWidth={1.9} />
           </span>
-        </span>
-        <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+          <span className="flex min-w-0 flex-grow flex-col">
+            <span className="font-semibold">Search this lecture</span>
+            <span className="te-muted text-[12px]">Chapters, key concepts, jump to a moment</span>
+          </span>
+          <ChevronRight className="h-[18px] w-[18px]" style={{ color: 'var(--te-text-4)' }} />
+        </button>
+      )}
+
+      <button type="button" onClick={() => setView('main')} className="te-btn mt-auto w-full">
+        Done
       </button>
-    </div>
+    </>
   );
 
-  const sourceMeta: SourceMeta = {
-    title: currentVideo?.title,
-    url: pageUrl ?? undefined,
-    platform: toPlatform(availability?.platform),
-    courseTitle: courseStructure?.title,
-    instructor: courseStructure?.instructor,
-  };
-
-  // Every view is the same size. The popup used to grow when the search panel
-  // opened, which made the whole window jump under the cursor.
-  const SHELL = 'w-[380px] h-[560px]';
+  // Chrome caps extension popups at 600px tall, so the design's 640px frame is
+  // trimmed and the body scrolls. Every view is the same size — the popup used
+  // to grow when the search panel opened, which made the window jump.
+  const SHELL = 'w-[380px] h-[600px]';
 
   if (showSearch) {
     return (
@@ -1454,354 +1825,36 @@ export const TranscriptExtractorPopup = () => {
   }
 
   return (
-    <div
-      className={`${SHELL} flex flex-col bg-white dark:bg-slate-900 text-slate-900 dark:text-white`}
-    >
-      <header className="flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 px-4 py-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <img
-            src="/icons/icon48.png"
-            alt="Transcript Extractor Logo"
-            className="w-7 h-7 object-contain flex-shrink-0"
-          />
-          <div className="min-w-0">
-            <h1 className="text-[13px] font-semibold leading-tight truncate">
-              Transcript Extractor
-            </h1>
-            {/* "Local · private" says it in two words. The long version lives
-                in the privacy policy, not on every screen. */}
-            <p className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
-              Local · private
-            </p>
-          </div>
-        </div>
+    <div className={`te-shell ${SHELL}`}>
+      {renderHeader()}
+      <main className="te-scroll flex min-h-0 flex-grow flex-col gap-3 overflow-y-auto px-3.5 pb-3.5 pt-2.5">
+        {unsaved && <section className="te-note te-note--warn flex flex-col gap-2" aria-label="Unsaved transcript">
+          <p role="status">{saving ? 'Saving transcript…' : 'Extracted, but not saved to your library.'}</p>
+          <button className="te-btn" disabled={saving} onClick={() => void retrySave()}>Retry save</button>
+          <button className="te-btn" onClick={() => void getExtensionService().then(service =>
+            service.downloadFile(unsaved.transcript, service.generateFilename(unsaved.title, 'txt'), 'text/plain')
+          )}>Download recovery copy</button>
+        </section>}
+        {batchState && (!batchState.isActive || batchState.isPaused) &&
+          (batchState.error || batchState.items.some(item => ['pending', 'extracting', 'failed'].includes(item.status))) && <section className="te-glass flex flex-col gap-2 p-3" aria-label="Collection recovery">
+          <p>{batchState.error || 'Saved collection progress is available.'}</p>
+          <p className="te-muted text-xs">Open a video in the same course or playlist to continue.</p>
+          {batchState.items.some(item => item.status === 'pending' || item.status === 'extracting') &&
+            <button className="te-btn" onClick={() => void handleResume()}>Resume collection</button>}
+          {batchState.items.some(item => item.status === 'failed') &&
+            <button className="te-btn" onClick={() => void handleResume(true)}>Retry failed items</button>}
+        </section>}
 
-        <button
-          onClick={handleThemeToggle}
-          className="flex-shrink-0 p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </button>
-      </header>
-
-      <main className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {renderExtractSection()}
-
-        {/* Stills. A transcript says "so we write x equals five"; the code on
-            screen is what the reader actually needs back. */}
-        <section>
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <h3 className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-              Visual notes
-              {frames.length > 0 && (
-                <span className="ml-1.5 normal-case font-semibold text-blue-600 dark:text-blue-400">
-                  {frames.length}
-                </span>
-              )}
-            </h3>
-            <div className="flex items-center gap-1.5">
-              {/* Only offered when the model is actually installed, so the
-                  button is never a promise this machine cannot keep. */}
-              {aiProbe?.ready && unreadFrames.length > 0 && (
-                <button
-                  onClick={handleReadFrames}
-                  disabled={isReadingFrames}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
-                >
-                  {isReadingFrames ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <ScanText className="w-3.5 h-3.5" />
-                  )}
-                  {isReadingFrames && readProgress
-                    ? `Reading ${readProgress.done}/${readProgress.total}`
-                    : `Read ${unreadFrames.length}`}
-                </button>
-              )}
-
-              <button
-                onClick={handleCaptureFrame}
-                disabled={isCapturing}
-                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-blue-100 dark:hover:bg-blue-900/40 hover:text-blue-700 dark:hover:text-blue-300 disabled:opacity-50 transition-colors"
-              >
-                {isCapturing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Camera className="w-3.5 h-3.5" />
-                )}
-                Capture frame
-              </button>
-            </div>
-          </div>
-
-          {captureNote && (
-            <p
-              className={`mb-2 text-[11px] leading-relaxed ${
-                captureNote.tone === 'ok'
-                  ? 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-amber-600 dark:text-amber-400'
-              }`}
-            >
-              {captureNote.text}
-            </p>
-          )}
-
-          {/* Whether this browser could read the text out of a screenshot.
-              Reported rather than assumed — Chrome's on-device model is absent
-              on plenty of machines. */}
-          {/* Capability, not an announcement.
-              When the model is ready there is nothing to act on, so it earns a
-              chip rather than a panel. It only grows back into something
-              bigger when there is a decision to make — a download to start —
-              or an explanation to give for why Read is missing. */}
-          {aiProbe?.ready && (
-            <p className="mb-2 inline-flex items-center gap-1 rounded-md bg-emerald-50 dark:bg-emerald-900/25 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
-              <Zap className="w-3 h-3" />
-              On-device AI
-            </p>
-          )}
-
-          {/* Chrome sits at "Pending Usage" until something asks for the model.
-              Nothing here asks without a click: it is a ~4 GB download, and it
-              is the user's bandwidth and disk. */}
-          {(aiProbe?.status === 'downloadable' || aiProbe?.status === 'downloading') && (
-            <div className="mb-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 px-2.5 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Read text off screenshots with Chrome's on-device model.
-                </p>
-                <button
-                  onClick={handleInstallModel}
-                  disabled={isInstallingModel}
-                  className="shrink-0 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[10px] font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
-                >
-                  {isInstallingModel && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {isInstallingModel ? 'Installing…' : 'Install (~4 GB)'}
-                </button>
-              </div>
-
-              {isInstallingModel && (
-                <>
-                  <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div
-                      className={`h-full bg-blue-600 ${
-                        installProgress === null ? 'w-1/3 animate-pulse' : 'transition-all'
-                      }`}
-                      style={
-                        installProgress === null
-                          ? undefined
-                          : { width: `${Math.round(installProgress * 100)}%` }
-                      }
-                    />
-                  </div>
-                  <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">
-                    {installProgress === null
-                      ? 'Downloading — Chrome does not report a percentage yet.'
-                      : `${Math.round(installProgress * 100)}% — you can keep using the extension.`}
-                  </p>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Why the Read button is absent. Silence would read as a bug. */}
-          {(aiProbe?.status === 'unavailable' || aiProbe?.status === 'unsupported') && (
-            <p className="mb-2 text-[10px] leading-relaxed text-slate-400 dark:text-slate-500">
-              {aiProbe.detail}
-            </p>
-          )}
-
-          {frames.length === 0 ? (
-            <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-              Pause on a diagram or a block of code and capture it. Stills are saved with the
-              lecture and exported alongside the transcript.
-            </p>
-          ) : (
-            <ul className="flex gap-2 overflow-x-auto pb-1">
-              {frames.map((frame) => (
-                <li key={frame.seconds} className="relative shrink-0 group">
-                  <button
-                    onClick={() =>
-                      setOpenFrame(openFrame === frame.seconds ? null : frame.seconds)
-                    }
-                    aria-label={`Inspect frame at ${formatClockLabel(frame.seconds)}`}
-                    className="block"
-                  >
-                    <img
-                      src={frame.dataUrl}
-                      alt={`Frame at ${formatClockLabel(frame.seconds)}`}
-                      className={`h-16 w-auto rounded-lg border transition-colors ${
-                        openFrame === frame.seconds
-                          ? 'border-blue-500 ring-2 ring-blue-500/30'
-                          : 'border-slate-200 dark:border-slate-700 hover:border-blue-400'
-                      }`}
-                    />
-                  </button>
-                  <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[9px] font-mono text-white tabular-nums">
-                    {formatClockLabel(frame.seconds)}
-                  </span>
-                  {/* A read frame carries its text into the export; showing
-                      which ones have been read is the difference between an
-                      image and searchable notes. */}
-                  {frame.readout ? (
-                    <span className="pointer-events-none absolute top-1 left-1 rounded bg-emerald-600/90 px-1 text-[9px] font-semibold text-white">
-                      text
-                    </span>
-                  ) : null}
-                  <button
-                    onClick={() => handleDeleteFrame(frame.seconds)}
-                    aria-label={`Remove frame at ${formatClockLabel(frame.seconds)}`}
-                    className="absolute -top-1.5 -right-1.5 rounded-full bg-slate-700 text-white p-0.5 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* What the model actually read, in full. The only way to judge
-              whether a transcription is good enough to keep. */}
-          {inspected && (
-            <div className="mt-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/60 p-2.5">
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                  On screen at {formatClockLabel(inspected.seconds)}
-                </span>
-                <button
-                  onClick={() => setOpenFrame(null)}
-                  aria-label="Close"
-                  className="p-0.5 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-
-              {inspected.readout === undefined ? (
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {aiProbe?.ready
-                    ? 'Not read yet. Use Read to transcribe it.'
-                    : 'Not read. On-device AI is not available on this machine.'}
-                </p>
-              ) : inspected.readout === '' ? (
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Read, but nothing legible was on screen.
-                </p>
-              ) : (
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-700 dark:text-slate-200 font-mono">
-                  {inspected.readout}
-                </pre>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Where this lecture stands.
-            Every count is an indexed lookup, and the status is derived from
-            them — the only stored part is "done", which is the one judgement
-            the data cannot make on the reader's behalf. */}
-        {activity && (activity.hasTranscript || activityCount(activity) > 0) && (
-          <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 p-3">
-            <div className="flex items-center justify-between gap-2 mb-2.5">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                This lecture
-              </h3>
-              <span
-                className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                  lectureStatus(activity) === 'completed'
-                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-                }`}
-              >
-                {STATUS_LABELS[lectureStatus(activity)]}
-              </span>
-            </div>
-
-            <dl className="grid grid-cols-4 gap-2 mb-2.5">
-              {[
-                { icon: <FileText className="w-3.5 h-3.5" />, label: 'Transcript', value: activity.hasTranscript ? '✓' : '—' },
-                { icon: <Highlighter className="w-3.5 h-3.5" />, label: 'Highlights', value: String(activity.highlights) },
-                { icon: <StickyNote className="w-3.5 h-3.5" />, label: 'Notes', value: String(activity.notes) },
-                { icon: <Camera className="w-3.5 h-3.5" />, label: 'Stills', value: String(activity.screenshots) },
-              ].map((entry) => (
-                <div key={entry.label} className="text-center">
-                  <dd className="text-[15px] font-semibold tabular-nums leading-none text-slate-700 dark:text-slate-200">
-                    {entry.value}
-                  </dd>
-                  <dt className="mt-1 text-[9px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                    {entry.label}
-                  </dt>
-                </div>
-              ))}
-            </dl>
-
-            <button
-              onClick={() => void toggleComplete()}
-              className={`w-full rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors ${
-                activity.completedAt === undefined
-                  ? 'border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800'
-                  : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50'
-              }`}
-            >
-              {activity.completedAt === undefined ? 'Mark as done' : '✓ Done — undo'}
-            </button>
-          </section>
-        )}
-
-        {collection.length > 0 && renderCollectionSection()}
-
-        {/* The library, at full size.
-            A popup is the wrong place to read three thousand words or search
-            across courses — and it is destroyed the moment it loses focus, so
-            it cannot even finish the work. The dashboard is an ordinary tab. */}
-        <button
-          onClick={openDashboard}
-          className="flex w-full items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-800 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
-        >
-          <Library className="w-4 h-4 shrink-0 text-slate-500 dark:text-slate-400" />
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-semibold text-slate-700 dark:text-slate-200">
-              Open library
-            </span>
-            <span className="block text-[11px] text-slate-500 dark:text-slate-400">
-              Read, search and annotate everything you have collected
-            </span>
-          </span>
-          <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />
-        </button>
-
-        {hasAnything && (
-          <>
-            <div className="border-t border-slate-200 dark:border-slate-800" />
-
-            {/* Export is what you do once, at the end — not the thing the
-                popup should lead with. Collapsed until asked for, so the
-                format picker and its explanation stop competing with the
-                lecture and the course. */}
-            <button
-              onClick={() => setExportOpen((open) => !open)}
-              aria-expanded={exportOpen}
-              className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
-            >
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                Export
-              </span>
-              <span className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                {FORMAT_LABELS[exportFormat]}
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform ${exportOpen ? 'rotate-180' : ''}`}
-                />
-              </span>
-            </button>
-
-            {exportOpen && renderExportOptionsSection()}
-          </>
-        )}
+        {view === 'settings'
+          ? renderSettings()
+          : batchState?.isActive && !batchState.isPaused
+            ? renderCourse()
+            : isExtracting
+              ? renderExtracting()
+              : isDone
+                ? renderDone()
+                : renderReady()}
       </main>
-
-
     </div>
   );
 };

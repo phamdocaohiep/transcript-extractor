@@ -194,3 +194,570 @@ body:not(.is-popup) #root {
     -moz-osx-font-smoothing: grayscale;
   }
 }
+
+/*
+ * Popup design system — "glass" redesign.
+ *
+ * Tokens live on `.te-shell` (popup) and `.te-page` (library) rather than
+ * `:root`, so they cannot leak into anything else, and are redefined under
+ * `.dark` for the dark theme. Components below are plain
+ * classes rather than utility soup: the popup repeats the same five surfaces
+ * (glass card, glass button, primary button, switch, pill) on every screen.
+ */
+.te-shell,
+.te-page {
+  --te-bg: #f2eef0;
+  --te-wash-1: rgba(255, 120, 110, 0.34);
+  --te-wash-2: rgba(255, 190, 130, 0.3);
+  --te-wash-3: rgba(150, 160, 255, 0.28);
+  --te-text: #1d1d1f;
+  --te-text-2: #3a3a3c;
+  --te-text-3: #515154;
+  --te-text-4: #6e6e73;
+  --te-glass: rgba(255, 255, 255, 0.62);
+  --te-glass-strong: rgba(255, 255, 255, 0.72);
+  --te-glass-border: rgba(255, 255, 255, 0.8);
+  --te-glass-hi: rgba(255, 255, 255, 0.95);
+  --te-glass-shadow: 0 8px 24px rgba(30, 40, 80, 0.08);
+  --te-btn: rgba(255, 255, 255, 0.55);
+  --te-btn-hover: rgba(255, 255, 255, 0.78);
+  --te-btn-border: rgba(255, 255, 255, 0.8);
+  --te-btn-hi: rgba(255, 255, 255, 0.9);
+  --te-divider: rgba(60, 60, 67, 0.12);
+  --te-fill: rgba(120, 120, 128, 0.1);
+  --te-track: rgba(120, 120, 128, 0.18);
+  --te-switch-off: rgba(120, 120, 128, 0.22);
+  --te-accent: #de2025;
+  --te-accent-hover: #c81b20;
+  --te-accent-text: #b3141a;
+  --te-accent-soft: rgba(222, 32, 37, 0.1);
+  --te-accent-glow: 0 8px 20px rgba(222, 32, 37, 0.3);
+  --te-success: #1e9e4a;
+  --te-success-soft: rgba(52, 199, 89, 0.16);
+  --te-success-text: #146b32;
+  --te-warn: #9a6200;
+  --te-warn-text: #7a4c00;
+  --te-warn-soft: rgba(255, 170, 0, 0.14);
+  --te-tile: #1d1d1f;
+  --te-tile-lines: #ffffff;
+  --te-tile-dot: #ff4d52;
+  --te-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  background-color: var(--te-bg);
+  background-image:
+    radial-gradient(circle at 12% 8%, var(--te-wash-1), transparent 42%),
+    radial-gradient(circle at 95% 32%, var(--te-wash-2), transparent 40%),
+    radial-gradient(circle at 30% 98%, var(--te-wash-3), transparent 45%);
+  color: var(--te-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Geist', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.te-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* The library page: the same tokens and wash, but an ordinary scrolling page. */
+.te-page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  background-attachment: fixed;
+}
+
+.dark .te-shell,
+.dark .te-page {
+  --te-bg: #0e1015;
+  --te-wash-1: rgba(222, 32, 37, 0.34);
+  --te-wash-2: rgba(255, 140, 60, 0.18);
+  --te-wash-3: rgba(90, 90, 255, 0.22);
+  --te-text: #f5f5f7;
+  --te-text-2: #d1d1d6;
+  --te-text-3: #aeaeb2;
+  --te-text-4: #98989d;
+  --te-glass: rgba(44, 48, 60, 0.52);
+  --te-glass-strong: rgba(44, 48, 60, 0.66);
+  --te-glass-border: rgba(255, 255, 255, 0.09);
+  --te-glass-hi: rgba(255, 255, 255, 0.08);
+  --te-glass-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --te-btn: rgba(255, 255, 255, 0.08);
+  --te-btn-hover: rgba(255, 255, 255, 0.14);
+  --te-btn-border: rgba(255, 255, 255, 0.1);
+  --te-btn-hi: rgba(255, 255, 255, 0.06);
+  --te-divider: rgba(255, 255, 255, 0.08);
+  --te-fill: rgba(255, 255, 255, 0.06);
+  --te-track: rgba(255, 255, 255, 0.12);
+  --te-switch-off: rgba(120, 120, 128, 0.36);
+  --te-accent-text: #ff9799;
+  --te-accent-soft: rgba(255, 90, 95, 0.16);
+  --te-accent-glow: 0 8px 22px rgba(222, 32, 37, 0.45);
+  --te-success: #30d158;
+  --te-success-soft: rgba(48, 209, 88, 0.18);
+  --te-success-text: #7be59a;
+  --te-warn: #ffb340;
+  --te-warn-text: #ffcc80;
+  --te-warn-soft: rgba(255, 170, 0, 0.14);
+  --te-tile: #f5f5f7;
+  --te-tile-lines: #0e1015;
+  --te-tile-dot: #de2025;
+}
+
+.te-shell button,
+.te-page button {
+  font: inherit;
+  cursor: pointer;
+}
+.te-shell button:disabled,
+.te-page button:disabled {
+  cursor: default;
+}
+.te-shell a,
+.te-page a {
+  color: var(--te-accent-text);
+}
+.te-shell :focus-visible,
+.te-page :focus-visible {
+  outline: 2px solid var(--te-accent);
+  outline-offset: 2px;
+}
+
+.te-mono {
+  font-family: var(--te-mono);
+  font-variant-numeric: tabular-nums;
+}
+.te-muted {
+  color: var(--te-text-3);
+}
+.te-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--te-text-3);
+}
+
+.te-glass {
+  border-radius: 18px;
+  background: var(--te-glass);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--te-glass-border);
+  box-shadow: inset 0 1px 0 var(--te-glass-hi), var(--te-glass-shadow);
+}
+.te-glass--strong {
+  background: var(--te-glass-strong);
+}
+.te-divide > * + * {
+  border-top: 1px solid var(--te-divider);
+}
+
+.te-icon-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--te-text-2);
+  background: var(--te-btn);
+  border: 1px solid var(--te-btn-border);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  transition: background-color 0.15s;
+}
+.te-icon-btn:hover {
+  background: var(--te-btn-hover);
+}
+
+.te-btn {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--te-text);
+  background: var(--te-btn);
+  border: 1px solid var(--te-btn-border);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow: inset 0 1px 0 var(--te-btn-hi);
+  transition: background-color 0.15s, opacity 0.15s;
+}
+.te-btn:hover:not(:disabled) {
+  background: var(--te-btn-hover);
+}
+.te-btn:disabled {
+  opacity: 0.5;
+}
+
+.te-btn-primary {
+  height: 50px;
+  border: 0;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--te-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), var(--te-accent-glow);
+  transition: background-color 0.15s, opacity 0.15s;
+}
+.te-btn-primary:hover:not(:disabled) {
+  background: var(--te-accent-hover);
+}
+.te-btn-primary:disabled {
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+.te-chip-btn {
+  height: 36px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--te-accent-text);
+  background: var(--te-accent-soft);
+  transition: opacity 0.15s;
+}
+.te-chip-btn:disabled {
+  opacity: 0.5;
+}
+.te-chip-btn--neutral {
+  color: var(--te-text);
+  background: var(--te-fill);
+  font-weight: 500;
+}
+.te-chip-btn--danger:hover {
+  color: var(--te-accent-text);
+}
+
+.te-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.te-pill--ok {
+  background: var(--te-success-soft);
+  color: var(--te-success-text);
+}
+.te-pill--warn {
+  background: var(--te-warn-soft);
+  color: var(--te-warn-text);
+}
+.te-pill--neutral {
+  background: var(--te-fill);
+  color: var(--te-text-3);
+}
+
+.te-note {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--te-fill);
+  font-size: 12px;
+  color: var(--te-text-2);
+}
+.te-note--warn {
+  background: var(--te-warn-soft);
+  color: var(--te-warn-text);
+}
+
+/* Switch: a real checkbox, visually replaced by the track that follows it. */
+.te-switch-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.te-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 46px;
+  height: 28px;
+  border-radius: 14px;
+  background: var(--te-switch-off);
+  transition: background-color 0.2s;
+}
+.te-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s;
+}
+.te-switch-input:checked + .te-switch {
+  background: var(--te-success);
+}
+.te-switch-input:checked + .te-switch::after {
+  transform: translateX(18px);
+}
+.te-switch-input:focus-visible + .te-switch {
+  outline: 2px solid var(--te-accent);
+  outline-offset: 2px;
+}
+
+.te-progress {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--te-track);
+  overflow: hidden;
+}
+.te-progress > div {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--te-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: width 0.3s;
+}
+.te-progress--indeterminate > div {
+  width: 35%;
+  animation: te-indeterminate 1.3s ease-in-out infinite;
+}
+@keyframes te-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(290%);
+  }
+}
+
+.te-row-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px 12px 12px;
+  text-align: left;
+  color: var(--te-text);
+}
+.te-row-link:hover {
+  background: var(--te-btn-hover);
+}
+.te-badge {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--te-accent-soft);
+  color: var(--te-accent-text);
+}
+
+.te-select {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 1px solid var(--te-btn-border);
+  background: var(--te-btn);
+  color: var(--te-text);
+  font: inherit;
+  font-weight: 500;
+}
+.te-select--inline {
+  width: auto;
+}
+.dark .te-select option,
+.dark .te-select optgroup {
+  background: #1c1e24;
+}
+
+/* The popup body scrolls when a state runs past Chrome's 600px cap; a
+   classic scrollbar would steal 15px from a 380px column. */
+.te-scroll {
+  scrollbar-width: none;
+}
+.te-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---- Library page ------------------------------------------------------- */
+
+.te-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--te-text);
+  font-weight: 500;
+  text-align: left;
+  transition: background-color 0.15s;
+}
+.te-nav-link:hover {
+  background: var(--te-fill);
+}
+.te-nav-link[aria-current='page'] {
+  background: var(--te-accent-soft);
+  color: var(--te-accent-text);
+  font-weight: 600;
+}
+
+.te-filter {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 22px;
+  border: 1px solid var(--te-btn-border);
+  background: var(--te-btn);
+  color: var(--te-text);
+  font-weight: 500;
+}
+.te-filter[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--te-text);
+  color: var(--te-bg);
+}
+
+.te-check {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--te-accent);
+}
+
+.te-ghost-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--te-text-2);
+  transition: background-color 0.15s;
+}
+.te-ghost-icon:hover {
+  background: var(--te-fill);
+}
+.te-ghost-icon--danger:hover {
+  color: var(--te-accent-text);
+  background: var(--te-accent-soft);
+}
+
+.te-row-selected {
+  background: var(--te-accent-soft);
+}
+.te-lecture-row:hover:not(.te-row-selected) {
+  background: var(--te-fill);
+}
+
+.te-selection-bar {
+  position: sticky;
+  bottom: 16px;
+  align-self: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 18px;
+  border-radius: 30px;
+  background: rgba(29, 29, 31, 0.86);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 14px 36px rgba(20, 20, 30, 0.28);
+  color: #ffffff;
+}
+.te-selection-bar button {
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.14);
+}
+.te-selection-bar button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+.te-selection-bar .te-danger {
+  background: var(--te-accent);
+  font-weight: 600;
+}
+.te-selection-bar .te-danger:hover:not(:disabled) {
+  background: var(--te-accent-hover);
+}
+.te-selection-bar .te-clear {
+  width: 44px;
+  padding: 0;
+  justify-content: center;
+  background: transparent;
+}
+
+.te-lib-side {
+  flex: 0 0 248px;
+  align-self: flex-start;
+  position: sticky;
+  top: 16px;
+  height: calc(100vh - 32px);
+}
+@media (max-width: 760px) {
+  .te-lib-side {
+    flex: 1 1 100%;
+    position: static;
+    height: auto;
+  }
+}
+
+/*
+ * Library page wash.
+ *
+ * The popup's washes are sized for a 380px window. Stretched over a full page
+ * the red one became a large red patch behind the sidebar, so the page gets a
+ * quieter version: the red softened to a pale peach and kept small, the
+ * colour carried by the cooler washes away from the navigation.
+ */
+.te-page {
+  --te-wash-1: rgba(255, 170, 150, 0.16);
+  --te-wash-2: rgba(255, 200, 150, 0.2);
+  --te-wash-3: rgba(150, 160, 255, 0.22);
+  background-image:
+    radial-gradient(circle at 0% 0%, var(--te-wash-1), transparent 28%),
+    radial-gradient(circle at 100% 18%, var(--te-wash-2), transparent 38%),
+    radial-gradient(circle at 45% 100%, var(--te-wash-3), transparent 45%);
+}
+.dark .te-page {
+  --te-wash-1: rgba(222, 32, 37, 0.1);
+  --te-wash-2: rgba(255, 140, 60, 0.1);
+  --te-wash-3: rgba(90, 90, 255, 0.18);
+}

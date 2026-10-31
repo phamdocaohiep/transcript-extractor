@@ -14,7 +14,8 @@
  * lecture page and update these fixtures to match.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import capturedUntimed from './__fixtures__/udemy-untimed.html?raw';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { UdemyExtractor } from './udemy-extractor';
 
 /** A sidebar in the shape the primary selectors expect. */
@@ -151,5 +152,23 @@ describe('extractCourseStructure', () => {
 
     expect(course?.title).toBe('Untitled Course');
     expect(course?.instructor).toBe('Unknown Instructor');
+  });
+});
+
+// Real DOM structure captured from the signed-in Business player; text sanitized.
+describe('captured untimed captions', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+  it('extracts the captured panel and marks duration-based timing as approximate', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = `<video></video>${capturedUntimed}`;
+    const video = document.querySelector('video')!;
+    Object.defineProperties(video, { readyState: { value: 4 }, duration: { value: 120 } });
+    const pending = UdemyExtractor.extractTranscript();
+    const assertion = expect(pending).resolves.toContain('<!-- timing: estimated -->');
+    await vi.runAllTimersAsync();
+    await assertion;
+    const result = await pending;
+    expect(result).toContain('<!-- timing: estimated -->');
+    expect(result).toContain('First example caption.');
   });
 });

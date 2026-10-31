@@ -1,3 +1,4 @@
+import { log } from './log';
 // Content Script for Transcript Extractor Extension - v3.0.0
 // This script runs in the context of web pages
 
@@ -57,6 +58,9 @@ export interface ContentScriptMessage {
     | 'START_BATCH_EXTRACTION'
     | 'CANCEL_BATCH_EXTRACTION'
     | 'GET_BATCH_STATUS'
+    | 'RESUME_BATCH'
+    | 'RETRY_BATCH'
+    | 'SET_BATCH_OPTIONS'
     | 'TEST_COURSE_STRUCTURE'
     | 'PREPARE_CAPTURE'
     | 'RESUME_PLAYBACK'
@@ -95,7 +99,7 @@ class ContentScript {
     try {
       if (this.isInitialized) return;
       
-      console.log('🎯 Initializing NEW Content Script v3.0.0...');
+      log.debug('🎯 Initializing NEW Content Script v3.0.0...');
 
       // Alt+Shift+N writes a note against the current moment, without leaving
       // the lecture. Installed unconditionally: the shortcut checks for a video
@@ -105,7 +109,7 @@ class ContentScript {
       // Listen for messages from popup and background
       chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
         try {
-          console.log('🎯 Content script received message:', message);
+          log.debug('🎯 Content script received message:', message);
           
           // Service Worker pattern - no AI message forwarding needed
           // AI summarization is handled directly via ExtensionService.summarizeWithAI()
@@ -121,8 +125,8 @@ class ContentScript {
       });
 
       this.isInitialized = true;
-      console.log('🎯 NEW Transcript Extractor Content Script v3.0.0 initialized on:', window.location.href);
-      console.log('🎯 NEW Content script ready to receive messages');
+      log.debug('🎯 NEW Transcript Extractor Content Script v3.0.0 initialized on:', window.location.href);
+      log.debug('🎯 NEW Content script ready to receive messages');
       
       // Override any existing content script
       window.transcriptExtractorContentScript = this;
@@ -130,12 +134,12 @@ class ContentScript {
       // Resume active batch if page reloaded during course extraction
       void getBatchState().then((state) => {
         if (state && state.isActive && !state.isPaused) {
-          console.log('🎯 Resuming active batch extraction after page navigation/reload...');
+          log.debug('🎯 Resuming active batch extraction after page navigation/reload...');
           setTimeout(() => {
             void this.processBatchQueue();
           }, 2000);
         }
-      });
+      }).catch(() => showPageToast('Could not read saved collection progress. Open the extension to retry.', 'warn'));
     } catch (error) {
       console.error('Error initializing content script:', error);
     }
@@ -213,6 +217,24 @@ class ContentScript {
           break;
         }
 
+        case 'RESUME_BATCH':
+        case 'RETRY_BATCH': {
+          const response = await chrome.runtime.sendMessage({ type: message.type });
+          if (!response?.success) throw new Error(response?.error || 'Could not resume collection.');
+          // An old loop may be finishing a request. Wait until it observes the changed run ID.
+          while (this.isProcessingBatch) await new Promise(resolve => setTimeout(resolve, 100));
+          void this.processBatchQueue();
+          sendResponse({ success: true, data: response.data });
+          break;
+        }
+        case 'SET_BATCH_OPTIONS': {
+          const state = await getBatchState();
+          if (!state) throw new Error('This tab does not own the active collection.');
+          state.autoDownload = Boolean(message.data?.autoDownload);
+          await setBatchState(state);
+          sendResponse({ success: true });
+          break;
+        }
         case 'GET_BATCH_STATUS': {
           const status = await getBatchState();
           sendResponse({ success: true, data: status });
@@ -544,7 +566,7 @@ class ContentScript {
     autoDownload?: boolean;
     exportFormat?: ExportFormat;
   }): Promise<BatchState | null> {
-    console.log('🎯 Starting full course batch extraction...');
+    log.debug('🎯 Starting full course batch extraction...');
 
     // 1. Expand all sections if on Udemy
     if (UdemyExtractor.isUdemyCoursePage()) {
@@ -577,6 +599,7 @@ class ContentScript {
     }
 
     const state: BatchState = {
+      runId: crypto.randomUUID(),
       isActive: true,
       isPaused: false,
       courseTitle: structure?.title || document.title || 'Course Transcript',
@@ -602,8 +625,9 @@ class ContentScript {
    * Cancel an in-progress batch extraction
    */
   private async cancelBatchExtraction(): Promise<void> {
-    console.log('🎯 Cancelling batch extraction...');
+    log.debug('🎯 Cancelling batch extraction...');
     const state = await getBatchState();
+    if (!state) throw new Error('Stop collection from its original video tab.');
     if (state) {
       state.isActive = false;
       state.isPaused = false;
@@ -619,6 +643,7 @@ class ContentScript {
   private async processBatchQueue(): Promise<void> {
     if (this.isProcessingBatch) return;
     this.isProcessingBatch = true;
+    let activeRun: string | undefined;
 
     try {
       while (true) {
@@ -626,6 +651,9 @@ class ContentScript {
         if (!state || !state.isActive || state.isPaused) {
           break;
         }
+
+        if (activeRun && state.runId !== activeRun) break;
+        activeRun = state.runId;
 
         if (state.currentIndex >= state.items.length) {
           // Completed all items in course
@@ -648,6 +676,11 @@ class ContentScript {
         }
 
         const item = state.items[state.currentIndex];
+        if (item.status === 'completed' || item.status === 'skipped' || item.status === 'failed') {
+          state.currentIndex++;
+          await setBatchState(state);
+          continue;
+        }
         item.status = 'extracting';
         state.updatedAt = Date.now();
         await setBatchState(state);
@@ -657,18 +690,27 @@ class ContentScript {
           'ok'
         );
 
+        const runId = state.runId;
+
         // Check if we are already on this lecture
         const currentLectureId = this.getCurrentLectureId();
         const isAlreadyOnLecture =
           item.id && item.id !== 'unknown' && !item.id.startsWith('lecture-')
             ? currentLectureId === item.id
             : item.url
-              ? window.location.href.split('?')[0] === item.url.split('?')[0]
+              ? lectureId(window.location.href, '') === lectureId(item.url, '')
               : false;
 
         if (!isAlreadyOnLecture) {
-          console.log(`🎯 Navigating to lecture: ${item.title} (ID: ${item.id})`);
-          await this.navigateToBatchItem(item);
+          log.debug(`🎯 Navigating to lecture: ${item.title} (ID: ${item.id})`);
+          const navigated = await this.navigateToBatchItem(item);
+          if (!navigated) {
+            item.status = 'failed';
+            item.error = 'Could not navigate to this video.';
+            state.currentIndex++;
+            await setBatchState(state);
+            continue;
+          }
         }
 
         // Wait for video/content to settle after navigation
@@ -676,7 +718,7 @@ class ContentScript {
 
         // Check if user cancelled while waiting
         const currentState = await getBatchState();
-        if (!currentState || !currentState.isActive) break;
+        if (!currentState || !currentState.isActive || currentState.runId !== runId) break;
 
         // Fast-path detection: If this lecture is clearly an article, handout, or quiz with no video, skip immediately
         const immediateVideo = document.querySelector('video') || document.querySelector('[data-purpose*="video"]');
@@ -688,7 +730,7 @@ class ContentScript {
         let lastError: string | null = null;
 
         if (!immediateVideo && immediateArticle) {
-          console.log(`🎯 Immediately detected non-video lecture (article/resource): ${item.title}`);
+          log.debug(`🎯 Immediately detected non-video lecture (article/resource): ${item.title}`);
           item.status = 'skipped';
           item.error = 'Article or reading handout (no video)';
           showPageToast(`⏭️ Skipped "${item.title.substring(0, 26)}…": Article (no video)`, 'warn');
@@ -696,7 +738,7 @@ class ContentScript {
           // Try extracting with up to 3 attempts for video lectures
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              console.log(`🎯 Extraction attempt ${attempt + 1} for ${item.title}...`);
+              log.debug(`🎯 Extraction attempt ${attempt + 1} for ${item.title}...`);
               transcript = await this.extractTranscript();
               if (transcript && transcript.trim().length > 0) {
                 break;
@@ -712,7 +754,7 @@ class ContentScript {
               '[data-purpose="article-viewer"], [data-purpose="resource-viewer"], [class*="resource-list"], [class*="article-asset"], [class*="article-viewer"], [data-purpose="quiz-pane"], [data-purpose="practice-test"], .quiz--container--37Y10'
             );
             if (isArticle && !hasVideo) {
-              console.log(`🎯 Confirmed non-video item (quiz/article): ${item.title}`);
+              log.debug(`🎯 Confirmed non-video item (quiz/article): ${item.title}`);
               break;
             }
 
@@ -720,42 +762,58 @@ class ContentScript {
           }
 
           if (transcript && transcript.trim().length > 0) {
-            item.status = 'completed';
             item.wordCount = transcript.trim().split(/\s+/).length;
-            console.log(`🎯 Extraction SUCCESS for ${item.title} (${item.wordCount} words)`);
-            await this.persistBatchLecture(item, transcript, state.courseTitle);
+            log.debug(`🎯 Extraction SUCCESS for ${item.title} (${item.wordCount} words)`);
+            try {
+              await this.persistBatchLecture(item, transcript, state.courseTitle);
+              item.status = 'completed';
+              item.error = undefined;
+            } catch {
+              item.status = 'failed';
+              item.error = 'Transcript extracted but not saved. Retry this item.';
+            }
           } else {
             const hasVideo = !!document.querySelector('video') || !!document.querySelector('[data-purpose*="video"]');
             const isArticle = !!document.querySelector(
               '[data-purpose="article-viewer"], [data-purpose="resource-viewer"], [class*="resource-list"], [class*="article-asset"], [class*="article-viewer"], [data-purpose="quiz-pane"], [data-purpose="practice-test"], .quiz--container--37Y10'
             );
 
-            item.status = 'skipped';
+            item.status = 'failed';
             if (isArticle && !hasVideo) {
+              item.status = 'skipped';
               item.error = 'Article or reading handout (no video)';
               showPageToast(`⏭️ Skipped "${item.title.substring(0, 26)}…": Article (no video)`, 'warn');
             } else if (lastError?.includes('Video not ready') || lastError?.includes('timeout')) {
               item.error = 'Video player loading timeout';
               showPageToast(`⏭️ Skipped "${item.title.substring(0, 26)}…": Video took too long to load`, 'warn');
             } else {
-              item.error = 'No captions or transcript available on Udemy';
+              item.error = lastError || 'No readable captions or transcript available.';
               showPageToast(`⏭️ Skipped "${item.title.substring(0, 26)}…": No captions on Udemy`, 'warn');
             }
-            console.log(`🎯 Skipping lecture ${item.title}: ${item.error}`);
+            log.debug(`🎯 Skipping lecture ${item.title}: ${item.error}`);
           }
         }
 
-        // Advance index
-        currentState.items[currentState.currentIndex] = item;
-        currentState.currentIndex++;
-        currentState.updatedAt = Date.now();
-        await setBatchState(currentState);
+        // Re-read after extraction; cancellation or a new run must never be overwritten.
+        const latest = await getBatchState();
+        if (!latest?.isActive || latest.runId !== runId) break;
+        latest.items[latest.currentIndex] = item;
+        latest.currentIndex++;
+        latest.updatedAt = Date.now();
+        await setBatchState(latest);
 
         // Polite delay between lectures to prevent UI lag and rate limiting
         await new Promise((resolve) => setTimeout(resolve, 400));
       }
     } catch (e) {
       console.error('Error in batch queue processing:', e);
+      showPageToast('Collection paused because progress could not be saved. Reopen the popup and resume.', 'warn');
+      const state = await getBatchState().catch(() => null);
+      if (state && state.runId === activeRun) {
+        state.isPaused = true;
+        state.error = e instanceof Error ? e.message : 'Collection interrupted.';
+        await setBatchState(state).catch(() => undefined);
+      }
     } finally {
       this.isProcessingBatch = false;
     }
@@ -886,7 +944,7 @@ class ContentScript {
           const navSucceeded =
             item.id && !item.id.startsWith('lecture-')
               ? currentLectureId === item.id
-              : window.location.href.split('?')[0] === item.url?.split('?')[0];
+              : lectureId(window.location.href, '') === lectureId(item.url, '');
 
           if (navSucceeded) {
             return true;
@@ -903,11 +961,11 @@ class ContentScript {
         }
       }
 
-      if (directUrl && window.location.href.split('?')[0] !== directUrl.split('?')[0]) {
-        console.log(`🎯 Direct navigation fallback to URL: ${directUrl}`);
+      if (directUrl && lectureId(window.location.href, '') !== lectureId(directUrl, '')) {
+        log.debug(`🎯 Direct navigation fallback to URL: ${directUrl}`);
         window.location.href = directUrl;
         await this.waitForLectureChange(5000);
-        return true;
+        return this.getCurrentLectureId() === item.id || lectureId(window.location.href, '') === lectureId(directUrl, '');
       }
 
       return false;
@@ -947,49 +1005,11 @@ class ContentScript {
     transcript: string,
     courseTitle: string
   ): Promise<void> {
-    try {
-      const url = item.url || window.location.href;
-      const id = lectureId(url, item.title);
-      const collected = {
-        id,
-        title: item.title,
-        url,
-        transcript,
-        collectedAt: Date.now(),
-      };
-
-      const courseId = courseIdFromUrl(url);
-      const canonicalCourseUrl = courseUrlFromId(courseId) || url;
-
-      // 1. Save to chrome.storage.local collection
-      const currentCollection = await loadCollection(canonicalCourseUrl);
-      const nextCollection = addLecture(currentCollection, collected);
-      await saveCollection(canonicalCourseUrl, nextCollection);
-      if (url !== canonicalCourseUrl) {
-        await saveCollection(url, nextCollection);
-      }
-
-      // 2. Save into IndexedDB library (both in local context and via background service worker)
-      await saveCourseLecture(collected, nextCollection, canonicalCourseUrl, {
-        courseTitle,
-      });
-
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'SAVE_LECTURE_TO_LIBRARY',
-          data: {
-            lecture: collected,
-            meta: { courseTitle },
-          },
-        });
-      } catch (msgErr) {
-        console.warn('Background library sync warning:', msgErr);
-      }
-
-      console.log(`🎯 Successfully saved batch lecture: ${item.title} (${nextCollection.length} in collection)`);
-    } catch (e) {
-      console.error('Failed to persist batch lecture:', e);
-    }
+    const url = window.location.href;
+    const collected = { id: lectureId(url, item.title), title: item.title, url, transcript, collectedAt: Date.now() };
+    const collection = await loadCollection(url);
+    // The adapter requests a committed save from the worker's extension-origin database.
+    await saveCourseLecture(collected, addLecture(collection, collected), url, { courseTitle });
   }
 
   /**
@@ -1046,7 +1066,7 @@ class ContentScript {
   }
 
   private async startBatchCollection(lectureIds: string[]) {
-    console.log('🎯 Starting batch collection for', lectureIds.length, 'lectures');
+    log.debug('🎯 Starting batch collection for', lectureIds.length, 'lectures');
     
     this.batchState = {
       isActive: true,
@@ -1061,12 +1081,12 @@ class ContentScript {
       this.batchState.progress[id] = 'pending';
     });
     
-    console.log('🎯 Batch collection initialized:', this.batchState);
+    log.debug('🎯 Batch collection initialized:', this.batchState);
   }
 
   private async navigateToNextLecture(): Promise<boolean> {
     try {
-      console.log('🎯 Attempting to navigate to next lecture using Udemy\'s Next button...');
+      log.debug('🎯 Attempting to navigate to next lecture using Udemy\'s Next button...');
       
       // Find Udemy's built-in "Next" button using multiple approaches
       let nextButton: Element | null = null;
@@ -1083,7 +1103,7 @@ class ContentScript {
         const button = document.querySelector(selector);
         if (button && (button as HTMLElement).offsetParent !== null) { // visible check
           nextButton = button;
-          console.log('🎯 Found Next button with selector:', selector);
+          log.debug('🎯 Found Next button with selector:', selector);
           break;
         }
       }
@@ -1098,18 +1118,18 @@ class ContentScript {
           if ((ariaLabel.includes('next') || textContent.includes('next')) && 
               (button as HTMLElement).offsetParent !== null) { // visible check
             nextButton = button;
-            console.log('🎯 Found Next button by text/aria-label:', button);
+            log.debug('🎯 Found Next button by text/aria-label:', button);
             break;
           }
         }
       }
       
       if (!nextButton) {
-        console.log('🎯 No Udemy Next button found');
+        log.debug('🎯 No Udemy Next button found');
         return false;
       }
 
-      console.log('🎯 Found Udemy Next button:', nextButton);
+      log.debug('🎯 Found Udemy Next button:', nextButton);
       
       // Check if the button is enabled (not disabled)
       const isDisabled = nextButton.hasAttribute('disabled') || 
@@ -1117,7 +1137,7 @@ class ContentScript {
                         nextButton.getAttribute('aria-disabled') === 'true';
       
       if (isDisabled) {
-        console.log('🎯 Next button is disabled - reached end of course');
+        log.debug('🎯 Next button is disabled - reached end of course');
         return false;
       }
 
@@ -1126,7 +1146,7 @@ class ContentScript {
       const initialLectureId = this.getCurrentLectureId();
       
       // Click the Next button with minimal interference to prevent popup closing
-      console.log('🎯 Clicking Next button...');
+      log.debug('🎯 Clicking Next button...');
       
       // Method 1: Direct click (most reliable)
       (nextButton as HTMLElement).click();
@@ -1149,13 +1169,13 @@ class ContentScript {
       const finalLectureId = this.getCurrentLectureId();
       
       if (finalUrl === initialUrl && finalLectureId === initialLectureId) {
-        console.log('🎯 Navigation failed - URL and lecture ID unchanged');
+        log.debug('🎯 Navigation failed - URL and lecture ID unchanged');
         return false;
       }
       
-      console.log('🎯 Navigation completed successfully using Udemy Next button');
-      console.log('🎯 URL changed from:', initialUrl, 'to:', finalUrl);
-      console.log('🎯 Lecture ID changed from:', initialLectureId, 'to:', finalLectureId);
+      log.debug('🎯 Navigation completed successfully using Udemy Next button');
+      log.debug('🎯 URL changed from:', initialUrl, 'to:', finalUrl);
+      log.debug('🎯 Lecture ID changed from:', initialLectureId, 'to:', finalLectureId);
       return true;
     } catch (error) {
       console.error('🎯 Failed to navigate to next lecture:', error);
@@ -1169,7 +1189,7 @@ class ContentScript {
       const initialUrl = window.location.href;
       const initialLectureId = this.getCurrentLectureId();
       
-      console.log('🎯 Waiting for lecture change. Initial URL:', initialUrl, 'Initial lecture ID:', initialLectureId);
+      log.debug('🎯 Waiting for lecture change. Initial URL:', initialUrl, 'Initial lecture ID:', initialLectureId);
       
       const checkForChange = () => {
         const currentUrl = window.location.href;
@@ -1177,20 +1197,20 @@ class ContentScript {
         
         // Check if URL changed (most reliable for SPA navigation)
         if (currentUrl !== initialUrl) {
-          console.log('🎯 URL change detected:', currentUrl);
+          log.debug('🎯 URL change detected:', currentUrl);
           resolve();
           return;
         }
         
         // Check if lecture ID changed (backup method)
         if (currentLectureId !== initialLectureId && currentLectureId !== 'unknown') {
-          console.log('🎯 Lecture ID change detected:', initialLectureId, '->', currentLectureId);
+          log.debug('🎯 Lecture ID change detected:', initialLectureId, '->', currentLectureId);
           resolve();
           return;
         }
         
         if (Date.now() - startTime > timeout) {
-          console.log('🎯 Timeout waiting for lecture change. Current URL:', currentUrl, 'Current lecture ID:', currentLectureId);
+          log.debug('🎯 Timeout waiting for lecture change. Current URL:', currentUrl, 'Current lecture ID:', currentLectureId);
           resolve();
           return;
         }
@@ -1206,25 +1226,25 @@ class ContentScript {
     try {
       // Get current lecture ID from URL
       const lectureId = this.getCurrentLectureId();
-      console.log('🎯 Collecting transcript for lecture:', lectureId);
+      log.debug('🎯 Collecting transcript for lecture:', lectureId);
       
       // Memory management check for batch processing
       if (this.batchState.isActive) {
         // Add delay between batch operations to prevent memory buildup
         await new Promise(resolve => setTimeout(resolve, 2000));
-        console.log('🧹 ContentScript: Added delay for batch processing memory management');
+        log.debug('🧹 ContentScript: Added delay for batch processing memory management');
       }
       
       // Quick check if page is ready for collection
       const isPageReady = UdemyExtractor.isPageReadyForCollection();
-      console.log('🎯 Page ready for collection:', isPageReady);
+      log.debug('🎯 Page ready for collection:', isPageReady);
       
       // Check if transcript is available first
       const isAvailable = await UdemyExtractor.isTranscriptAvailable();
-      console.log('🎯 Transcript availability check result:', isAvailable);
+      log.debug('🎯 Transcript availability check result:', isAvailable);
       
       if (!isAvailable) {
-        console.log('🎯 No transcript available for lecture:', lectureId, '- Skipping');
+        log.debug('🎯 No transcript available for lecture:', lectureId, '- Skipping');
         // Store as skipped
         this.batchState.collectedTranscripts[lectureId] = 'NO_TRANSCRIPT_AVAILABLE';
         this.batchState.progress[lectureId] = 'skipped';
@@ -1232,34 +1252,26 @@ class ContentScript {
         return { lectureId, transcript: 'NO_TRANSCRIPT_AVAILABLE' };
       }
       
-      console.log('🎯 Transcript is available, proceeding with extraction...');
+      log.debug('🎯 Transcript is available, proceeding with extraction...');
       
       // Extract transcript
-      let transcript = await this.extractTranscript();
-      console.log('🎯 Extract transcript result:', transcript ? `Length: ${transcript.length} chars` : 'null/empty');
+      const transcript = await this.extractTranscript();
+      log.debug('🎯 Extract transcript result:', transcript ? `Length: ${transcript.length} chars` : 'null/empty');
       
       if (transcript && transcript.trim().length > 0) {
-        console.log('🎯 Transcript extracted successfully, length:', transcript.length);
-        console.log('🎯 First 200 chars of transcript:', transcript.substring(0, 200));
-        
-        // Memory optimization for batch processing
-        if (this.batchState.isActive && transcript.length > 30000) {
-          console.log('🧹 ContentScript: Large transcript detected, optimizing for batch processing...');
-          // Truncate very long transcripts to prevent memory issues
-          transcript = transcript.substring(0, 30000) + '... [truncated for batch processing]';
-        }
+        log.debug('🎯 Transcript extracted successfully, length:', transcript.length);
         
         // Store in batch state
         this.batchState.collectedTranscripts[lectureId] = transcript;
         this.batchState.progress[lectureId] = 'completed';
         
         // Note: Clipboard copying is now handled by the popup to prevent conflicts
-        console.log('🎯 Transcript collected successfully - clipboard will be handled by popup');
+        log.debug('🎯 Transcript collected successfully - clipboard will be handled by popup');
         
-        console.log('🎯 Successfully collected transcript for lecture:', lectureId);
+        log.debug('🎯 Successfully collected transcript for lecture:', lectureId);
         return { lectureId, transcript };
       } else {
-        console.log('🎯 No transcript extracted or transcript is empty');
+        log.debug('🎯 No transcript extracted or transcript is empty');
         throw new Error('No transcript extracted or transcript is empty');
       }
     } catch (error) {
@@ -1276,20 +1288,20 @@ class ContentScript {
 
   private async copyToClipboard(text: string): Promise<boolean> {
     try {
-      console.log('🎯 Copying to clipboard, text length:', text.length);
+      log.debug('🎯 Copying to clipboard, text length:', text.length);
       
       // Method 1: Modern Clipboard API (try without clearing first)
       if (navigator.clipboard && window.isSecureContext) {
         try {
           await navigator.clipboard.writeText(text);
-          console.log('🎯 Successfully copied to clipboard using modern API');
+          log.debug('🎯 Successfully copied to clipboard using modern API');
           return true;
         } catch (error) {
-          console.log('🎯 Modern clipboard API failed:', error instanceof Error ? error.message : String(error));
+          log.debug('🎯 Modern clipboard API failed:', error instanceof Error ? error.message : String(error));
         }
       }
     } catch (error) {
-      console.log('🎯 Modern clipboard API failed, trying fallback...');
+      log.debug('🎯 Modern clipboard API failed, trying fallback...');
     }
 
     try {
@@ -1316,10 +1328,10 @@ class ContentScript {
       document.body.removeChild(textarea);
       
       if (success) {
-        console.log('🎯 Fallback clipboard copy successful');
+        log.debug('🎯 Fallback clipboard copy successful');
         return true;
       } else {
-        console.log('🎯 Fallback clipboard copy failed');
+        log.debug('🎯 Fallback clipboard copy failed');
         return false;
       }
     } catch (error) {
@@ -1330,8 +1342,8 @@ class ContentScript {
 
   private getCurrentLectureId(): string {
     // Extract lecture ID from URL
-    const match = window.location.pathname.match(/\/learn\/lecture\/(\d+)/);
-    return match ? match[1] : 'unknown';
+    const url = new URL(window.location.href);
+    return url.searchParams.get('v') || url.pathname.match(/\/lecture\/([^/]+)/)?.[1] || 'unknown';
   }
 
   private async exportBatchTranscripts(format: 'markdown' | 'txt' | 'json'): Promise<string> {
@@ -1402,13 +1414,13 @@ class ContentScript {
 
 // Prevent duplicate initialization
 if (!window.transcriptExtractorContentScript) {
-  console.log('🎯 Initializing NEW Content Script v3.0.0...');
+  log.debug('🎯 Initializing NEW Content Script v3.0.0...');
   try {
     new ContentScript();
-    console.log('🎯 Content Script initialization completed successfully');
+    log.debug('🎯 Content Script initialization completed successfully');
   } catch (error) {
     console.error('🎯 Error during Content Script initialization:', error);
   }
 } else {
-  console.log('🎯 Content Script already initialized, skipping...');
+  log.debug('🎯 Content Script already initialized, skipping...');
 }
