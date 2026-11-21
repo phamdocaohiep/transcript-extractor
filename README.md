@@ -121,6 +121,30 @@ or cancellation events. Keep the side panel open until downloads finish.
 HLS MPEG-TS and fragmented MP4 are saved as standard MP4 with their original audio/video tracks.
 Direct MP4 is saved as supplied. Standard AES-128 HLS is supported. DRM, SAMPLE-AES, DASH, live streams,
 separate audio/video playlists and discontinuities requiring additional remuxing remain unsupported.
+
+### YouTube downloads
+
+Open a YouTube watch page or Short in the Chrome profile where you are signed in, then open the
+extension. The same Download action, destination folder, automatic mode and playlist selection are used.
+Playlist navigation retains its playlist ID. The list reflects the items rendered in YouTube's playlist panel.
+
+The extension reads formats from the current page's player and correlates them with requests the player
+has already made. Requests use the current Chrome session; cookies are not exported to a local application
+or sent to a separate download server. Extra CDN hosts use the existing access dialog.
+
+Progressive files and separate video/audio files are downloaded in bounded byte ranges, validated for
+completeness, and combined inside the extension. AVC/AAC is preferred when available; MP4 and WebM
+outputs retain the original codecs. Temporary track files are removed on success, failure or cancellation.
+Transcript failures do not prevent saving the video.
+
+This supports finite files exposed by the signed-in player. It does not evaluate downloaded player
+scripts, invent missing signatures, bypass DRM, or implement SABR/UMP-only delivery. A video that does
+not expose a complete usable video/audio pair is reported as unsupported. Live account playback still
+needs verification in Chrome before release; fixture and decoder tests do not establish that every
+YouTube video can be downloaded.
+
+Implementation references: [Chrome scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting),
+[Mediabunny media writing](https://mediabunny.dev/guide/writing-media-files).
 Incomplete video files are removed after a failure.
 
 Preferences, the folder handle, progress and installation ID remain in the same Chrome profile

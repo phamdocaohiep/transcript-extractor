@@ -1,5 +1,6 @@
 import type { VideoDownloadContext } from './hls-discovery';
 import { lectureId } from './collection';
+import { selectStreams } from './stream-discovery';
 
 export class MissingStreamError extends Error {}
 
@@ -28,7 +29,8 @@ export async function resolvePlayback(
       }
       if (next && lectureId(next.url, '') === lectureId(url, '')) {
         last = next;
-        if (next.protected || next.sources.length) return next;
+        if (next.unavailable) throw new Error(next.unavailable);
+        if (next.protected || next.sources.length || selectStreams(next.streams || [])) return next;
         if (
           !next.loading &&
           next.hasPlayer === false &&
@@ -60,6 +62,10 @@ export async function resolvePlayback(
     !/\.udemy\.com\/course\/[^/]+\/learn\/lecture\//.test(url)
   )
     return last;
+  if (last?.streams)
+    throw new MissingStreamError(
+      'The YouTube player did not expose a complete downloadable video and audio pair after reloading.'
+    );
   throw new MissingStreamError('The player has no supported HLS or MP4 stream after reloading.');
 }
 
@@ -68,7 +74,7 @@ export function canRetryDownload(error: unknown): boolean {
   return (
     error instanceof TypeError ||
     (error instanceof Error &&
-      /HTTP (401|403|408|429|5\d\d)|expired|network|fetch|timeout|connect|older extension script/i.test(
+      /HTTP (401|403|408|429|5\d\d)|expired|network|fetch|timeout|connect|incomplete|truncated|byte range|older extension script/i.test(
         error.message
       ))
   );

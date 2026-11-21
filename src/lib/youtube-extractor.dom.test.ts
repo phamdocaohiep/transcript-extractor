@@ -169,3 +169,20 @@ it('does not treat the captured no-captions button as available captions', async
   document.body.innerHTML = markup;
   expect(YouTubeExtractor.isTranscriptAvailable()).toBe(false);
 });
+
+it('recognizes Shorts and reads its identifier', () => {
+  window.history.replaceState({}, '', '/shorts/shortExample');
+  document.body.innerHTML = '<h1>A short example</h1>';
+  expect(YouTubeExtractor.isYouTubeVideoPage()).toBe(true);
+  expect(YouTubeExtractor.getCurrentVideoInfo()?.videoId).toBe('shortExample');
+});
+
+it('retains the active playlist when video links omit its list parameter', () => {
+  window.history.replaceState({}, '', '/watch?list=PL123&v=aaaaaaaaaaa');
+  document.body.innerHTML = `<ytd-playlist-panel-renderer>
+    <ytd-playlist-panel-video-renderer><a href="/watch?v=bbbbbbbbbbb"><span id="video-title">Second item</span></a></ytd-playlist-panel-video-renderer>
+  </ytd-playlist-panel-renderer>`;
+  const item = YouTubeExtractor.extractPlaylist()?.videos[0];
+  expect(item?.videoId).toBe('bbbbbbbbbbb');
+  expect(new URL(item!.url).searchParams.get('list')).toBe('PL123');
+});

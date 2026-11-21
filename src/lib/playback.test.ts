@@ -110,3 +110,36 @@ it('retries a missing video element after reload instead of persisting a skipped
   expect((await pending).hasPlayer).toBe(true);
   expect(reload).toHaveBeenCalledOnce();
 });
+
+it('primes YouTube before giving up when its transformed requests have not appeared yet', async () => {
+  let playing = false;
+  const prime = vi.fn(async () => {
+    playing = true;
+  });
+  const pending = resolvePlayback(
+    'https://www.youtube.com/watch?v=example',
+    async () => ({
+      ...context,
+      url: 'https://www.youtube.com/watch?v=example',
+      streams: playing
+        ? [
+            {
+              url: 'https://r1.googlevideo.com/videoplayback?id=test',
+              mimeType: 'video/mp4; codecs="avc1.640028, mp4a.40.2"',
+              video: true,
+              audio: true,
+              height: 720,
+              bitrate: 1000,
+            },
+          ]
+        : [],
+    }),
+    prime,
+    vi.fn(),
+    signal(),
+    vi.fn()
+  );
+  await vi.runAllTimersAsync();
+  expect((await pending).streams).toHaveLength(1);
+  expect(prime).toHaveBeenCalledOnce();
+});

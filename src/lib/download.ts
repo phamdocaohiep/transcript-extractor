@@ -1,6 +1,8 @@
 import { hlsUrl, readHlsResponse, resolveHls, safeVideoName, writeHls, type HlsPlan } from './hls';
 import { probeMediaFile, writeMediaFile } from './media-file';
 import { saveMp4 } from './mp4';
+import { selectStreams, type StreamInfo } from './stream-discovery';
+import { saveTracks, type TrackPlan } from './track-file';
 import type { VideoDownloadContext } from './hls-discovery';
 import type { Preferences } from './download-types';
 import { groupKey } from './identity';
@@ -15,7 +17,7 @@ export class HostAccessNeeded extends Error {
   }
 }
 
-export type DownloadPlan = HlsPlan | { kind: 'file'; url: string; extension: 'mp4' };
+export type DownloadPlan = HlsPlan | { kind: 'file'; url: string; extension: 'mp4' } | TrackPlan;
 export async function checkHosts(urls: string[]) {
   const origins = [...new Set(urls.map(url => `${new URL(hlsUrl(url)).origin}/*`))];
   const missing: string[] = [];
@@ -36,7 +38,19 @@ export async function fetchVideo(url: string, signal: AbortSignal, headers?: Hea
   });
 }
 
-export async function prepareVideo(source: string, signal: AbortSignal): Promise<DownloadPlan> {
+export async function prepareVideo(
+  source: string,
+  signal: AbortSignal,
+  streams?: StreamInfo[]
+): Promise<DownloadPlan> {
+  signal.throwIfAborted();
+  if (streams?.length) {
+    const selected = selectStreams(streams);
+    if (selected) {
+      await checkHosts([selected.video.url, ...(selected.audio ? [selected.audio.url] : [])]);
+      return { kind: 'tracks', ...selected };
+    }
+  }
   const url = hlsUrl(source);
   if (/\.mp4$/i.test(new URL(url).pathname)) {
     await probeMediaFile(await fetchVideo(url, signal), signal);
@@ -68,9 +82,12 @@ export async function saveDownload(
     throw new Error('No supported video is ready.');
   if (preferences.transcript && !transcript.trim()) throw new Error('No transcript is ready.');
   const url = new URL(groupKey(context.url));
-  const name = safeVideoName(
-    `${url.hostname}_${url.pathname.split('/').filter(Boolean).at(-1) || 'collection'}`
-  );
+  const identifier =
+    url.searchParams.get('list') ||
+    url.searchParams.get('v') ||
+    url.pathname.split('/').filter(Boolean).at(-1) ||
+    'collection';
+  const name = safeVideoName(`${url.hostname}_${identifier}`);
   const folder = await directory.getDirectoryHandle(name, { create: true });
   const base = `${safeVideoName(context.title)}-${crypto.randomUUID().slice(0, 8)}`;
   if (preferences.transcript) {
@@ -89,7 +106,7 @@ export async function saveDownload(
     }
   }
   if (preferences.video && plan) {
-    const filename = `${base}.mp4`;
+    const filename = `${base}.${plan.kind === 'tracks' ? plan.extension : 'mp4'}`;
     let writer: FileSystemWritableFileStream | undefined;
     try {
       writer = await (await folder.getFileHandle(filename, { create: true })).createWritable();
@@ -99,6 +116,15 @@ export async function saveDownload(
           bytes => writer!.write(bytes as BufferSource),
           signal,
           bytes => progress(0, 0, bytes)
+        );
+      } else if (plan.kind === 'tracks') {
+        await saveTracks(
+          plan,
+          (url, headers) => fetchVideo(url, signal, headers),
+          writer,
+          signal,
+          progress,
+          notice
         );
       } else {
         await saveMp4(

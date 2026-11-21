@@ -1,3 +1,5 @@
+import type { StreamInfo } from './stream-discovery';
+
 export interface VideoDownloadContext {
   url: string;
   title: string;
@@ -6,6 +8,8 @@ export interface VideoDownloadContext {
   hasPlayer?: boolean;
   loading?: boolean;
   kind?: 'video' | 'quiz' | 'article';
+  streams?: StreamInfo[];
+  unavailable?: string;
 }
 
 /** Observe only resource URLs already requested by this lecture page. */

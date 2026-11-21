@@ -17,6 +17,11 @@ vi.mock('../lib/preferences', () => ({
   saveDirectory: vi.fn(async () => undefined),
   hasDirectoryAccess: vi.fn(async () => true),
 }));
+vi.mock('../lib/track-file', () => ({
+  saveTracks: vi.fn(async (_plan, _fetch, destination: FileSystemWritableFileStream) => {
+    await destination.write(new Uint8Array([1, 2, 3]));
+  }),
+}));
 vi.mock('../lib/mp4', () => ({
   saveMp4: (
     writeSource: (write: (bytes: Uint8Array) => Promise<void>) => Promise<void>,
@@ -753,4 +758,54 @@ it('keeps a declined permission request visible so it can be retried', async () 
   expect(dialog.open).toBe(true);
   expect(dialog.querySelector('[role="alert"]')?.textContent).toContain('not granted');
   expect(Object.keys(writes)).toHaveLength(0);
+});
+
+it('discovers the signed-in YouTube player in MAIN world and saves paired tracks through the shared download flow', async () => {
+  const { saveTracks } = await import('../lib/track-file');
+  currentUrl = 'https://www.youtube.com/watch?v=example';
+  listing = [{ id: 'example', title: 'An example', url: currentUrl }];
+  hasSources = false;
+  const video = {
+    url: 'https://r1.googlevideo.com/videoplayback?id=test&itag=137',
+    mimeType: 'video/mp4; codecs="avc1.640028"',
+    video: true,
+    audio: false,
+    height: 1080,
+    bitrate: 1000,
+  };
+  const audio = {
+    url: 'https://r1.googlevideo.com/videoplayback?id=test&itag=140',
+    mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+    video: false,
+    audio: true,
+    height: 0,
+    bitrate: 128,
+  };
+  Object.assign(chrome, {
+    scripting: {
+      executeScript: vi.fn(async () => [
+        { result: { url: currentUrl, title: 'An example', streams: [video, audio] } },
+      ]),
+    },
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+    expect.objectContaining({
+      world: 'MAIN',
+      target: { tabId: 42, frameIds: [0] },
+      func: expect.any(Function),
+    })
+  );
+  expect(saveTracks).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'tracks', video, audio, extension: 'mp4' }),
+    expect.any(Function),
+    expect.anything(),
+    expect.anything(),
+    expect.any(Function),
+    expect.any(Function)
+  );
+  expect(Object.keys(writes).some(name => name.endsWith('.mp4'))).toBe(true);
+  expect(container.textContent).toContain('1 saved');
 });

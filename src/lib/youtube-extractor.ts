@@ -53,10 +53,9 @@ export class YouTubeExtractor {
       const hostname = window.location.hostname;
       const pathname = window.location.pathname;
       
-      const isYouTube = hostname.includes('youtube.com');
-      const isWatch = pathname.includes('/watch');
-      const isYoutuBe = url.includes('youtu.be/');
-      const result = url.includes('youtube.com/watch') || url.includes('youtu.be/');
+      const result = ((hostname === 'youtube.com' || hostname.endsWith('.youtube.com')) &&
+        ((pathname === '/watch' && new URL(url).searchParams.has('v')) || /^\/shorts\/[^/]+/.test(pathname))) ||
+        (hostname === 'youtu.be' && pathname.length > 1);
       
       // Debug logging removed for production
       
@@ -101,9 +100,9 @@ export class YouTubeExtractor {
    */
   private static getVideoId(): string | null {
     try {
-      const url = window.location.href;
-      const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/);
-      return match ? match[1] : null;
+      const url = new URL(window.location.href);
+      return url.searchParams.get('v') || url.pathname.match(/^\/shorts\/([^/]+)/)?.[1] ||
+        (url.hostname === 'youtu.be' ? url.pathname.slice(1).split('/')[0] : null);
     } catch (error) {
       console.error('Error extracting video ID:', error);
       return null;
@@ -1162,6 +1161,12 @@ export class YouTubeExtractor {
         url = linkElement.getAttribute('href') || '';
         if (url.startsWith('/')) {
           url = 'https://www.youtube.com' + url;
+        }
+        const list = new URL(window.location.href).searchParams.get('list');
+        if (list) {
+          const target = new URL(url);
+          target.searchParams.set('list', list);
+          url = target.href;
         }
         
         // Extract video ID from URL

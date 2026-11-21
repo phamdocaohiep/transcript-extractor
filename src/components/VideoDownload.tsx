@@ -5,6 +5,7 @@ import { lectureId } from '../lib/collection';
 import { loadCourseCollection } from '../lib/collection-store';
 import { groupKey } from '../lib/identity';
 import { resolvePlayback, canRetryDownload } from '../lib/playback';
+import { readStreams, selectStreams } from '../lib/stream-discovery';
 import {
   loadPreferences,
   savePreferences,
@@ -111,7 +112,28 @@ export function VideoDownload({
             'The lecture tab did not return video information. Reload it and reconnect.'
       );
     }
-    return reply.data;
+    const next = reply.data as VideoDownloadContext;
+    const url = new URL(next.url);
+    if (
+      /(^|\.)youtube\.com$/.test(url.hostname) &&
+      (url.pathname === '/watch' || url.pathname.startsWith('/shorts/'))
+    ) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        world: 'MAIN',
+        func: readStreams,
+      });
+      const result = results[0]?.result;
+      if (result && lectureId(result.url, '') === lectureId(next.url, ''))
+        return {
+          ...next,
+          streams: result.streams,
+          unavailable: result.unavailable,
+          title: result.title || next.title,
+          kind: 'video',
+        };
+    }
+    return next;
   }
   async function waitForContext(
     signal: AbortSignal,
@@ -263,7 +285,7 @@ export function VideoDownload({
   ) {
     if (includeVideo && next.protected)
       throw new Error('This player uses DRM. Protected video is not supported.');
-    const nextPlan = includeVideo ? await prepareVideo(selected, signal) : null;
+    const nextPlan = includeVideo ? await prepareVideo(selected, signal, next.streams) : null;
     let text = '';
     let warning = '';
     if (preferences.transcript) {
@@ -304,7 +326,12 @@ export function VideoDownload({
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         current = await recover(current, signal);
-        if (preferences.video && current.hasPlayer === false && !current.sources.length) {
+        if (
+          preferences.video &&
+          current.hasPlayer === false &&
+          !current.sources.length &&
+          !selectStreams(current.streams || [])
+        ) {
           if (!preferences.transcript)
             return { status: 'skipped' as const, warning: 'This page has no video.' };
           let result;
@@ -630,7 +657,7 @@ export function VideoDownload({
             disabled={busy || !loaded}
             onChange={e => void changePreferences({ ...preferences, video: e.target.checked })}
           />{' '}
-          Video (MP4)
+          Video (MP4 / WebM)
         </label>
         <label>
           <input
