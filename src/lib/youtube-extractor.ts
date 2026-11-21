@@ -35,15 +35,71 @@ export interface YouTubePlaylistVideo {
   duration: string;
   index: number;
   isCurrentVideo: boolean;
+  unavailable?: boolean;
 }
 
 export interface YouTubePlaylist {
   title: string;
   videos: YouTubePlaylistVideo[];
   totalVideos: number;
+  expectedVideos?: number;
 }
 
 export class YouTubeExtractor {
+  static isPlaylistPage(): boolean {
+    const url = new URL(window.location.href);
+    return (url.hostname === 'youtube.com' || url.hostname.endsWith('.youtube.com')) &&
+      (url.pathname === '/playlist' || url.pathname === '/watch') && !!url.searchParams.get('list');
+  }
+
+  /** Let YouTube render lazy rows before extracting, without opening a video. */
+  static async loadAllItems(signal?: AbortSignal): Promise<void> {
+    if (!this.isPlaylistPage()) return;
+    let panel = this.findPlaylistPanel();
+    const waiting = Date.now() + 5000;
+    while (!panel && Date.now() < waiting) {
+      await this.pause(signal);
+      panel = this.findPlaylistPanel();
+    }
+    if (!panel) return;
+    let scroller: Element = panel;
+    while (scroller.parentElement && scroller.scrollHeight <= scroller.clientHeight)
+      scroller = scroller.parentElement;
+    if (scroller.scrollHeight <= scroller.clientHeight) scroller = document.scrollingElement || document.documentElement;
+    const original = scroller.scrollTop;
+    const rows = () => panel.querySelectorAll('ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer').length;
+    const expected = this.getExpectedCount();
+    if (expected && rows() >= expected) return;
+    let previous = rows();
+    let stable = 0;
+    const deadline = Date.now() + 20_000;
+    try {
+      while (Date.now() < deadline && (stable < 5 || (rows() < (this.getExpectedCount() || 0) && stable < 15))) {
+        signal?.throwIfAborted();
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await this.pause(signal);
+        const count = rows();
+        stable = count === previous ? stable + 1 : 0;
+        previous = count;
+      }
+    } finally { scroller.scrollTop = original; }
+  }
+  private static pause(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
+      const done = () => { signal?.removeEventListener('abort', cancel); resolve(); };
+      const timer = setTimeout(done, 500);
+      const cancel = () => { clearTimeout(timer); reject(signal?.reason); };
+      signal?.addEventListener('abort', cancel, { once: true });
+    });
+  }
+  private static getExpectedCount(): number | undefined {
+    const text = document.querySelector('ytd-playlist-panel-renderer .index-message')?.textContent ||
+      document.querySelector('ytd-playlist-header-renderer #stats, ytd-playlist-header-renderer')?.textContent || '';
+    const count = text.match(/\d+\s*\/\s*(\d+)/)?.[1] || text.match(/(\d[\d.,]*)\s*(?:videos?|bài học)/i)?.[1];
+    return count ? Number(count.replace(/\D/g, '')) || undefined : undefined;
+  }
   /**
    * Check if current page is a YouTube video page
    */
@@ -71,7 +127,7 @@ export class YouTubeExtractor {
    */
   static getCurrentVideoInfo(): YouTubeVideo | null {
     try {
-      if (!this.isYouTubeVideoPage()) {
+      if (!this.isYouTubeVideoPage() && !this.isPlaylistPage()) {
         return null;
       }
 
@@ -980,8 +1036,8 @@ export class YouTubeExtractor {
     try {
       log.debug('🎯 Starting YouTube playlist extraction...');
       
-      // Check if we're on a YouTube page with playlist
-      if (!this.isYouTubeVideoPage()) {
+      // A playlist can be selected before any video is opened.
+      if (!this.isYouTubeVideoPage() && !this.isPlaylistPage()) {
         log.debug('🎯 Not on a YouTube video page');
         return null;
       }
@@ -1008,7 +1064,8 @@ export class YouTubeExtractor {
       const playlist: YouTubePlaylist = {
         title: playlistTitle,
         videos: videos,
-        totalVideos: videos.length
+        totalVideos: videos.length,
+        expectedVideos: this.getExpectedCount(),
       };
 
       log.debug('🎯 Playlist extraction completed:', {
@@ -1033,15 +1090,11 @@ export class YouTubeExtractor {
       
       const playlistSelectors = [
         // Main playlist panel selectors
+        ...(window.location.pathname === '/playlist' ? ['ytd-playlist-video-list-renderer'] : []),
         'ytd-playlist-panel-renderer',
+        'ytd-playlist-video-list-renderer',
         '#playlist-items',
         '.playlist-items',
-        'ytd-playlist-panel-video-renderer',
-        
-        // Alternative selectors
-        '[id*="playlist"]',
-        '[class*="playlist"]',
-        'ytd-item-section-renderer[lockup-container-type="3"]'
       ];
 
       for (const selector of playlistSelectors) {
@@ -1054,7 +1107,7 @@ export class YouTubeExtractor {
       }
 
       // Look for any container with playlist video renderers
-      const videoRenderers = document.querySelectorAll('ytd-playlist-panel-video-renderer');
+      const videoRenderers = document.querySelectorAll('ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer');
       if (videoRenderers.length > 0) {
         log.debug('🎯 Found playlist video renderers:', videoRenderers.length);
         return videoRenderers[0].closest('ytd-playlist-panel-renderer') || videoRenderers[0].parentElement;
@@ -1079,6 +1132,7 @@ export class YouTubeExtractor {
       
       // Find all playlist video renderers
       const videoSelectors = [
+        'ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer',
         'ytd-playlist-panel-video-renderer',
         '.playlist-items ytd-playlist-panel-video-renderer',
         '#playlist-items ytd-playlist-panel-video-renderer'
@@ -1130,6 +1184,7 @@ export class YouTubeExtractor {
       
       // Extract video title
       const titleSelectors = [
+        '[id="video-title"]',
         '#video-title',
         '.video-title',
         'span#video-title',
@@ -1147,10 +1202,6 @@ export class YouTubeExtractor {
         }
       }
 
-      if (!title) {
-        log.debug(`🎯 Could not extract title for video ${index}`);
-        return null;
-      }
 
       // Extract video URL and ID
       const linkElement = videoElement.querySelector('a[href*="/watch"]');
@@ -1175,6 +1226,9 @@ export class YouTubeExtractor {
           videoId = videoIdMatch[1];
         }
       }
+      if (!title) title = linkElement?.getAttribute('title') || linkElement?.textContent?.trim() || 'Unavailable video';
+      if (!videoId) return { title, videoId: `unavailable-${index}`, url: '', duration: '', index,
+        isCurrentVideo: false, unavailable: true };
 
       // Extract duration
       const durationSelectors = [
@@ -1228,10 +1282,14 @@ export class YouTubeExtractor {
   private static getPlaylistTitle(): string | null {
     try {
       const titleSelectors = [
+        'ytd-playlist-panel-renderer .title',
+        'ytd-playlist-panel-renderer #title a',
+        'ytd-playlist-header-renderer #title',
+        'ytd-playlist-header-renderer h1',
+        'yt-page-header-view-model h1',
         'h1.ytd-playlist-header-renderer',
         '.ytd-playlist-header-renderer h1',
-        'yt-formatted-string[title]',
-        'h1[title]'
+        'ytd-playlist-header-renderer h1[title]'
       ];
 
       for (const selector of titleSelectors) {

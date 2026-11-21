@@ -10,6 +10,7 @@ import type { Preferences } from './download-types';
 import { groupKey } from './identity';
 import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
+import { classifyError, type Trace } from './diagnostics';
 
 export const completionKey = (url: string) => `download_completed:${lectureId(url, '')}`;
 export function getFolderName(value: string) {
@@ -33,67 +34,123 @@ export type DownloadPlan =
   | { kind: 'file'; url: string; extension: 'mp4' }
   | TrackPlan
   | AdaptivePlan;
-export async function checkHosts(urls: string[]) {
+export async function checkHosts(urls: string[], trace?: Trace) {
   const origins = [...new Set(urls.map(url => `${new URL(hlsUrl(url)).origin}/*`))];
   const missing: string[] = [];
   for (const origin of origins) {
-    if (!(await chrome.permissions.contains({ origins: [origin] }))) missing.push(origin);
+    if (!(await chrome.permissions.contains({ origins: [origin] }))) {
+      // YouTube can move either track to another CDN hostname during playback.
+      // Ask once for its video-server family, while preserving existing grants.
+      const hostname = new URL(origin).hostname;
+      const pattern = hostname.endsWith('.googlevideo.com')
+        ? 'https://*.googlevideo.com/*'
+        : origin;
+      if (!missing.includes(pattern)) missing.push(pattern);
+    }
   }
-  if (missing.length) throw new HostAccessNeeded(missing);
+  if (missing.length) {
+    trace?.('permission_needed', { origins: missing });
+    throw new HostAccessNeeded(missing);
+  }
 }
 export async function fetchVideo(
   url: string,
   signal: AbortSignal,
   headers?: HeadersInit,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  trace?: Trace
 ) {
-  await checkHosts([url]);
+  await checkHosts([url], trace);
+  const origin = `${new URL(url).origin}/*`;
+  const started = Date.now();
+  trace?.('request_started', { origin });
   // Signed URLs are used as supplied. Never synthesize auth headers or follow
   // redirects to an unapproved host.
-  return fetch(url, {
-    ...options,
-    signal: AbortSignal.any([
-      signal,
-      ...(options.signal ? [options.signal] : []),
-      AbortSignal.timeout(45_000),
-    ]),
-    headers,
-    credentials: 'include',
-    redirect: 'error',
-  });
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: AbortSignal.any([
+        signal,
+        ...(options.signal ? [options.signal] : []),
+        AbortSignal.timeout(45_000),
+      ]),
+      headers,
+      credentials: 'include',
+      redirect: 'error',
+    });
+    trace?.('request_finished', {
+      origin,
+      status: response.status,
+      elapsedMs: Date.now() - started,
+    });
+    return response;
+  } catch (error) {
+    trace?.('request_failed', {
+      origin,
+      code: classifyError(error),
+      elapsedMs: Date.now() - started,
+    });
+    throw error;
+  }
 }
 
 export async function prepareVideo(
   source: string,
   signal: AbortSignal,
   streams?: StreamInfo[],
-  adaptive?: AdaptiveInfo
+  adaptive?: AdaptiveInfo,
+  trace?: Trace
 ): Promise<DownloadPlan> {
   signal.throwIfAborted();
   if (streams?.length) {
     const selected = selectStreams(streams);
     if (selected) {
-      await checkHosts([selected.video.url, ...(selected.audio ? [selected.audio.url] : [])]);
+      await checkHosts(
+        [selected.video.url, ...(selected.audio ? [selected.audio.url] : [])],
+        trace
+      );
+      trace?.('plan_ready', {
+        protocol: 'tracks',
+        extension: selected.extension,
+        height: selected.video.height,
+      });
       return { kind: 'tracks', ...selected };
     }
   }
   if (adaptive) {
     const plan = selectAdaptive(adaptive);
     if (!plan) throw new Error('The player did not advertise compatible video and audio formats.');
-    await checkHosts([adaptive.url]);
+    await checkHosts([adaptive.url], trace);
+    trace?.('plan_ready', {
+      protocol: 'sabr',
+      extension: plan.extension,
+      videoFormat: plan.video.itag,
+      audioFormat: plan.audio.itag,
+      height: plan.video.height,
+      duration: adaptive.duration,
+    });
     return plan;
   }
   const url = hlsUrl(source);
   if (/\.mp4$/i.test(new URL(url).pathname)) {
-    await probeMediaFile(await fetchVideo(url, signal), signal);
+    await probeMediaFile(await fetchVideo(url, signal, undefined, {}, trace), signal);
+    trace?.('plan_ready', { protocol: 'file', extension: 'mp4' });
     return { kind: 'file', url, extension: 'mp4' };
   }
   const plan = await resolveHls(url, async selected =>
     new TextDecoder().decode(
-      await readHlsResponse(await fetchVideo(selected, signal), 2 * 1024 * 1024, signal)
+      await readHlsResponse(
+        await fetchVideo(selected, signal, undefined, {}, trace),
+        2 * 1024 * 1024,
+        signal
+      )
     )
   );
-  await checkHosts(plan.parts.flatMap(part => (part.key ? [part.url, part.key.url] : [part.url])));
+  await checkHosts(
+    plan.parts.flatMap(part => (part.key ? [part.url, part.key.url] : [part.url])),
+    trace
+  );
+  trace?.('plan_ready', { protocol: 'hls', extension: 'mp4', total: plan.parts.length });
   return plan;
 }
 
@@ -105,7 +162,8 @@ export async function saveDownload(
   preferences: Preferences,
   signal: AbortSignal,
   progress: (completed: number, total: number, bytes: number) => void,
-  notice: (value: string) => void
+  notice: (value: string) => void,
+  trace?: Trace
 ): Promise<void> {
   await assertEntitlement();
   signal.throwIfAborted();
@@ -125,6 +183,7 @@ export async function saveDownload(
       );
       signal.throwIfAborted();
       await writer.close();
+      trace?.('file_saved', { format: 'transcript', extension: 'md' });
     } catch (error) {
       await writer.abort().catch(() => undefined);
       await folder.removeEntry(`${base}.md`).catch(() => undefined);
@@ -138,7 +197,7 @@ export async function saveDownload(
       writer = await (await folder.getFileHandle(filename, { create: true })).createWritable();
       if (plan.kind === 'file') {
         await writeMediaFile(
-          await fetchVideo(plan.url, signal),
+          await fetchVideo(plan.url, signal, undefined, {}, trace),
           bytes => writer!.write(bytes as BufferSource),
           signal,
           bytes => progress(0, 0, bytes)
@@ -146,7 +205,7 @@ export async function saveDownload(
       } else if (plan.kind === 'adaptive') {
         await saveAdaptive(
           plan,
-          (url, options) => fetchVideo(url, signal, options.headers, options),
+          (url, options) => fetchVideo(url, signal, options.headers, options, trace),
           writer,
           signal,
           progress,
@@ -155,7 +214,7 @@ export async function saveDownload(
       } else if (plan.kind === 'tracks') {
         await saveTracks(
           plan,
-          (url, headers) => fetchVideo(url, signal, headers),
+          (url, headers) => fetchVideo(url, signal, headers, {}, trace),
           writer,
           signal,
           progress,
@@ -174,9 +233,11 @@ export async function saveDownload(
                     ? {
                         Range: `bytes=${part.range.start}-${part.range.start + part.range.length - 1}`,
                       }
-                    : undefined
+                    : undefined,
+                  {},
+                  trace
                 ),
-              (key, token) => fetchVideo(key, token),
+              (key, token) => fetchVideo(key, token, undefined, {}, trace),
               write,
               signal,
               progress
@@ -188,6 +249,10 @@ export async function saveDownload(
       }
       signal.throwIfAborted();
       await writer.close();
+      trace?.('file_saved', {
+        format: 'video',
+        extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',
+      });
     } catch (error) {
       await writer?.abort().catch(() => undefined);
       await folder.removeEntry(filename).catch(() => undefined);

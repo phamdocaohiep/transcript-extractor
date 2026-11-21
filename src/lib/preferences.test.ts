@@ -33,3 +33,34 @@ it('restores the selected folder handle from a reopened database', async () => {
   await saveDirectory(handle);
   expect(await loadDirectory()).toEqual(handle);
 });
+
+it('does not ask again for a folder whose permission is already granted', async () => {
+  const { hasDirectoryAccess } = await import('./preferences');
+  const handle = { queryPermission: vi.fn(async () => 'granted'), requestPermission: vi.fn() };
+  const requested = vi.fn();
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(handle.requestPermission).not.toHaveBeenCalled();
+  expect(requested).not.toHaveBeenCalled();
+});
+it('requests folder access once and reuses the browser grant on subsequent checks', async () => {
+  const { hasDirectoryAccess } = await import('./preferences');
+  let granted = false;
+  const handle = {
+    queryPermission: vi.fn(async () => (granted ? 'granted' : 'prompt')),
+    requestPermission: vi.fn(async () => {
+      granted = true;
+      return 'granted';
+    }),
+  };
+  const requested = vi.fn();
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(handle.requestPermission).toHaveBeenCalledOnce();
+  expect(requested).toHaveBeenCalledOnce();
+});

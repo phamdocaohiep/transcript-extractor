@@ -12,4 +12,6 @@ export interface DownloadItem {
   selected: boolean;
   status: 'pending' | 'downloading' | 'completed' | 'partial' | 'failed' | 'skipped';
   error?: string;
+  saved?: { video: boolean; transcript: boolean };
+  available?: boolean;
 }

@@ -57,12 +57,15 @@ export async function loadDirectory(): Promise<FileSystemDirectoryHandle | null>
 
 export async function hasDirectoryAccess(
   directory: FileSystemDirectoryHandle,
-  request = false
+  request = false,
+  onRequest?: () => void
 ): Promise<boolean> {
   const handle = directory as FileSystemDirectoryHandle & {
     queryPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
     requestPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
   };
-  if (request) return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted';
-  return (await handle.queryPermission({ mode: 'readwrite' })) === 'granted';
+  if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') return true;
+  if (!request) return false;
+  onRequest?.();
+  return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted';
 }

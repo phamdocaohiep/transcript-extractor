@@ -37,6 +37,7 @@ import {
 } from '../../lib/batch-service';
 import { VideoDownload } from '../VideoDownload';
 import { SubscriptionSettings } from '../SubscriptionSettings';
+import { Diagnostics } from '../Diagnostics';
 import { StorageService } from '../../lib/storage-service';
 import type { ExportFormat } from '../../lib/extension-service';
 import { formatTimestamp, parseTranscript, type SourceMeta } from '../../lib/transcript';
@@ -1888,6 +1889,7 @@ export const TranscriptExtractorPopup = () => {
           )}
 
         {view === 'settings' && <SubscriptionSettings />}
+        {view === 'settings' && <Diagnostics busy={downloadBusy} />}
         {view === 'main' && sourceTabId === undefined && (
           <p className="te-muted text-sm">Open a video or course page to start downloading.</p>
         )}

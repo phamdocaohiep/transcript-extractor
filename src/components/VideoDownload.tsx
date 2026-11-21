@@ -20,6 +20,8 @@ import {
   hasDirectoryAccess,
 } from '../lib/preferences';
 import type { DownloadItem, Preferences } from '../lib/download-types';
+import { getSaved, getCounts } from '../lib/result-state';
+import { startRun, classifyError, type Trace } from '../lib/diagnostics';
 
 class PageConnectionError extends Error {}
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Download failed.');
@@ -61,6 +63,11 @@ export function VideoDownload({
   });
   const [loaded, setLoaded] = useState(false);
   const [items, setItems] = useState<DownloadItem[]>([]);
+  const [listSize, setListSize] = useState<{
+    loaded: number;
+    expected: number;
+    unique: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -83,12 +90,14 @@ export function VideoDownload({
     else if (!hosts.length && dialog.open) dialog.close();
   }, [hosts]);
   const settings = useRef(preferences);
+  const trace = useRef<Trace>(() => undefined);
   settings.current = preferences;
 
   function report(err: unknown) {
     if (err instanceof HostAccessNeeded) {
       setHosts(err.origins);
       setAccessError('');
+      trace.current('run_paused', { code: 'host_access', origins: err.origins });
     }
     setError(
       err instanceof DOMException && err.name === 'AbortError'
@@ -118,6 +127,10 @@ export function VideoDownload({
             'The lecture tab did not return video information. Reload it and reconnect.'
       );
     }
+    if (reply.data.protocolVersion !== 2)
+      throw new PageConnectionError(
+        'The page is running an older extension script. Reconnecting after reload.'
+      );
     const next = reply.data as VideoDownloadContext;
     const url = new URL(next.url);
     if (
@@ -289,16 +302,18 @@ export function VideoDownload({
     next: VideoDownloadContext,
     selected: string,
     signal: AbortSignal,
-    includeVideo = preferences.video
+    includeVideo = preferences.video,
+    includeTranscript = preferences.transcript,
+    savedVideo = false
   ) {
     if (includeVideo && next.protected)
       throw new Error('This player uses DRM. Protected video is not supported.');
     const nextPlan = includeVideo
-      ? await prepareVideo(selected, signal, next.streams, next.adaptive)
+      ? await prepareVideo(selected, signal, next.streams, next.adaptive, trace.current)
       : null;
     let text = '';
     let warning = '';
-    if (preferences.transcript) {
+    if (includeTranscript) {
       try {
         const saved = await loadCourseCollection(next.url);
         text = saved.find(item => item.id === lectureId(next.url, ''))?.transcript || '';
@@ -310,7 +325,8 @@ export function VideoDownload({
         }
       } catch (err) {
         signal.throwIfAborted();
-        if (!nextPlan) throw err;
+        trace.current('transcript_failed', { code: classifyError(err) });
+        if (!nextPlan && !savedVideo) throw err;
         warning = `Video saved; transcript unavailable: ${errorText(err)}`;
       }
     }
@@ -320,40 +336,57 @@ export function VideoDownload({
       throw new Error('The lecture tab changed. Refresh the detected streams before downloading.');
     return { plan: nextPlan, text, warning };
   }
-  async function recover(next: VideoDownloadContext, signal: AbortSignal) {
-    if (!preferences.video) return next;
+  async function recover(
+    next: VideoDownloadContext,
+    signal: AbortSignal,
+    includeVideo = preferences.video
+  ) {
+    if (!includeVideo) return next;
     return resolvePlayback(
       next.url,
       pageContext,
       () => send('PREPARE_DOWNLOAD'),
       () => chrome.tabs.reload(tabId),
       signal,
-      () => setNotice('Reloading the page and retrying the video…')
+      () => {
+        trace.current('retry');
+        setNotice('Reloading the page and retrying the video…');
+      }
     );
   }
-  async function saveWithRetry(next: VideoDownloadContext, signal: AbortSignal) {
+  async function saveWithRetry(
+    next: VideoDownloadContext,
+    signal: AbortSignal,
+    saved = { video: false, transcript: false }
+  ) {
+    const choice = {
+      ...preferences,
+      video: preferences.video && !saved.video,
+      transcript: preferences.transcript && !saved.transcript,
+    };
     let current = next;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        current = await recover(current, signal);
+        current = await recover(current, signal, choice.video);
         if (
-          preferences.video &&
+          choice.video &&
           current.hasPlayer === false &&
           !current.sources.length &&
           !selectStreams(current.streams || []) &&
           !current.adaptive
         ) {
-          if (!preferences.transcript)
-            return { status: 'skipped' as const, warning: 'This page has no video.' };
+          if (!choice.transcript)
+            return { status: 'skipped' as const, warning: 'This page has no video.', saved };
           let result;
           try {
-            result = await prepare(current, '', signal, false);
+            result = await prepare(current, '', signal, false, choice.transcript);
           } catch (err) {
             if (/no transcript|no caption|not available|not found/i.test(errorText(err))) {
               setNotice('Skipped. This page has no video player or transcript.');
               return {
                 status: 'skipped' as const,
                 warning: 'This page has no video or transcript.',
+                saved,
               };
             }
             throw err;
@@ -363,34 +396,54 @@ export function VideoDownload({
             null,
             result.text,
             directory!,
-            { ...preferences, video: false },
+            { ...choice, video: false },
             signal,
             (completed, total, bytes) => setProgress({ completed, total, bytes }),
-            setNotice
+            setNotice,
+            trace.current
           );
-          return { status: 'skipped' as const, warning: 'No video player. Transcript saved.' };
+          return {
+            status: 'skipped' as const,
+            warning: 'No video player. Transcript saved.',
+            saved: { ...saved, transcript: true },
+          };
         }
-        const result = await prepare(current, current.sources[0] || source, signal);
-        await saveDownload(
+        const result = await prepare(
           current,
-          result.plan,
-          result.text,
-          directory!,
-          { ...preferences, transcript: preferences.transcript && !!result.text.trim() },
+          current.sources[0] || source,
           signal,
-          (completed, total, bytes) => setProgress({ completed, total, bytes }),
-          setNotice
+          choice.video,
+          choice.transcript,
+          preferences.video && saved.video
         );
+        const actual = { ...choice, transcript: choice.transcript && !!result.text.trim() };
+        if (actual.video || actual.transcript)
+          await saveDownload(
+            current,
+            result.plan,
+            result.text,
+            directory!,
+            actual,
+            signal,
+            (completed, total, bytes) => setProgress({ completed, total, bytes }),
+            setNotice,
+            trace.current
+          );
         setContext(current);
         if (result.warning) setNotice(result.warning);
         return {
           status: result.warning ? ('partial' as const) : ('completed' as const),
           warning: result.warning,
+          saved: {
+            video: saved.video || actual.video,
+            transcript: saved.transcript || actual.transcript,
+          },
         };
       } catch (err) {
         if (attempt || !canRetryDownload(err)) throw err;
         signal.throwIfAborted();
         setNotice('Reloading the page and retrying the download…');
+        trace.current('retry', { code: classifyError(err) });
         await chrome.tabs.reload(tabId);
         current = await waitForContext(signal, current.url);
       }
@@ -419,12 +472,16 @@ export function VideoDownload({
   }
   async function ensureDirectory(): Promise<boolean> {
     if (!directory) {
+      trace.current('directory_result', { configured: false, granted: false });
       setError('No download folder configured. Choose a folder in Settings before downloading.');
       return false;
     }
     try {
       // Called directly from Download so Chrome can show its native permission dialog.
-      const granted = await hasDirectoryAccess(directory, true);
+      const granted = await hasDirectoryAccess(directory, true, () =>
+        trace.current('permission_requested', { permission: 'directory' })
+      );
+      trace.current('directory_result', { configured: true, granted });
       setAccess(granted);
       if (!granted) setError('Folder access was not granted. Click Download to try again.');
       return granted;
@@ -438,15 +495,17 @@ export function VideoDownload({
     setRequestingAccess(true);
     setAccessError('');
     try {
-      if (!(await chrome.permissions.request({ origins: hosts })))
-        throw new Error('Video host access was not granted.');
+      trace.current('permission_requested', { permission: 'host', origins: hosts });
+      const granted = await chrome.permissions.request({ origins: hosts });
+      trace.current('permission_result', { permission: 'host', origins: hosts, granted });
+      if (!granted) throw new Error('Video host access was not granted.');
       setHosts([]);
       setError('');
       automaticAttempt.current = '';
       setNotice('Host access granted. Resuming download…');
       if (resumeQueue.current) {
         resumeQueue.current = false;
-        await runQueue();
+        await runQueue(true);
       }
     } catch (err) {
       setAccessError(errorText(err));
@@ -464,14 +523,26 @@ export function VideoDownload({
   async function loadItems() {
     if (working.current || !context) return;
     working.current = true;
+    const abort = new AbortController();
+    controller.current = abort;
+    const cancel = () => {
+      void send('CANCEL_DOWNLOAD_ITEMS').catch(() => undefined);
+    };
+    abort.signal.addEventListener('abort', cancel, { once: true });
+    const listingTrace = startRun('list');
     setBusy(true);
     setError('');
     setNotice('Loading items…');
     try {
       const response = await send('GET_DOWNLOAD_ITEMS');
+      abort.signal.throwIfAborted();
       if (!response?.success) throw new Error(response?.error || 'Could not load the item list.');
       setTitle(response.data?.title || context.title);
       const sections = Array.isArray(response.data?.sections) ? response.data.sections : [];
+      const keys = sections.flatMap((section: { lectures?: Array<{ url?: string }> }) =>
+        (section.lectures || []).flatMap(item => (item.url ? [completionKey(item.url)] : []))
+      );
+      const completedFiles = keys.length ? await chrome.storage.local.get(keys) : {};
       const stored = (await chrome.storage.local.get(queueKey(context.url)))[
         queueKey(context.url)
       ] as DownloadItem[] | undefined;
@@ -483,13 +554,46 @@ export function VideoDownload({
           if (!item.id || seen.has(item.id)) continue;
           seen.add(item.id);
           const previous = stored?.find(value => value.id === item.id);
+          const previousFiles = previous
+            ? getSaved(previous, preferences)
+            : { video: false, transcript: false };
+          const completed = item.url
+            ? (completedFiles[completionKey(item.url)] as
+                | { video?: boolean; transcript?: boolean }
+                | undefined)
+            : undefined;
+          const saved = {
+            video: previousFiles.video || completed?.video === true,
+            transcript: previousFiles.transcript || completed?.transcript === true,
+          };
+          const complete =
+            (preferences.video || preferences.transcript) &&
+            (!preferences.video || saved.video) &&
+            (!preferences.transcript || saved.transcript);
+          const partial =
+            preferences.video && saved.video && preferences.transcript && !saved.transcript;
           next.push({
             id: item.id,
             title: item.title || 'Untitled',
             section: section.title,
             url: item.url,
-            selected: true,
-            status: previous?.status === 'completed' ? previous.status : 'pending',
+            selected: item.available !== false,
+            available: item.available !== false,
+            status:
+              item.available === false
+                ? 'skipped'
+                : complete
+                  ? 'completed'
+                  : partial
+                    ? 'partial'
+                    : 'pending',
+            saved,
+            error:
+              item.available === false
+                ? 'This entry is unavailable in the playlist.'
+                : previous?.status === 'partial'
+                  ? previous.error
+                  : undefined,
           });
         }
       }
@@ -507,19 +611,37 @@ export function VideoDownload({
           status: 'pending',
         });
       await persistItems(next, context.url);
+      const loadedCount = Number(response.data?.loadedItems) || next.length;
+      const expectedCount = Number(response.data?.totalItems) || loadedCount;
+      setListSize({ loaded: loadedCount, expected: expectedCount, unique: next.length });
+      listingTrace('list_loaded', { loadedCount, expectedCount, uniqueCount: next.length });
+      listingTrace('run_finished', {
+        result: loadedCount < expectedCount ? 'partial' : 'completed',
+        total: next.length,
+      });
     } catch (err) {
+      listingTrace('run_finished', { result: 'failed', code: classifyError(err) });
       report(err);
     } finally {
+      abort.signal.removeEventListener('abort', cancel);
+      if (controller.current === abort) controller.current = null;
       setNotice('');
       working.current = false;
       setBusy(false);
     }
   }
-  async function runQueue() {
+  async function runQueue(resume = false) {
     if (working.current || !context) return;
     working.current = true;
+    if (!resume) trace.current = startRun('manual');
+    trace.current('discovery', {
+      video: preferences.video,
+      transcript: preferences.transcript,
+      automatic: preferences.automatic,
+    });
     setBusy(true);
     if (!(await ensureDirectory())) {
+      trace.current('run_finished', { result: 'failed', code: 'storage' });
       working.current = false;
       setBusy(false);
       return;
@@ -561,12 +683,36 @@ export function VideoDownload({
             setContext(current);
             setSource(current.sources[0] || '');
             automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}`;
-            const saved = await saveWithRetry(current, abort.signal);
+            trace.current('discovery', {
+              source: /(^|\.)youtube\.com$/.test(new URL(current.url).hostname)
+                ? 'youtube'
+                : /(^|\.)udemy\.com$/.test(new URL(current.url).hostname)
+                  ? 'udemy'
+                  : 'other',
+              player: current.hasPlayer,
+              loading: current.loading,
+              adaptive: !!current.adaptive,
+              directCount: current.sources.length + (current.streams?.length || 0),
+              formatCount: current.adaptive?.formats.length || 0,
+            });
+            const saved = await saveWithRetry(current, abort.signal, getSaved(item, preferences));
             item.status = saved.status;
             item.error = saved.warning || undefined;
+            item.saved = saved.saved;
+            trace.current('item_result', {
+              item: next.indexOf(item) + 1,
+              result: saved.status,
+              video: saved.saved.video,
+              transcript: saved.saved.transcript,
+            });
           } catch (err) {
             item.status = 'failed';
             item.error = errorText(err);
+            trace.current('item_result', {
+              item: next.indexOf(item) + 1,
+              result: 'failed',
+              code: classifyError(err),
+            });
             await persistItems([...next], root);
             if (
               err instanceof HostAccessNeeded ||
@@ -578,12 +724,24 @@ export function VideoDownload({
           }
           await persistItems([...next], root);
         }
+        const counts = getCounts(next, preferences);
         setNotice(
-          `Finished: ${next.filter(item => item.status === 'completed').length} saved, ${next.some(item => item.status === 'partial') ? `${next.filter(item => item.status === 'partial').length} video saved without transcript, ` : ''}${next.filter(item => item.status === 'skipped').length} without video, ${next.filter(item => item.status === 'failed').length} failed.`
+          `Finished: ${counts.saved} saved, ${counts.partial ? `${counts.partial} video saved without transcript, ` : ''}${counts.skipped} without video, ${counts.failed} failed.`
         );
+        trace.current('run_finished', {
+          total: counts.total,
+          video: counts.video > 0,
+          transcript: counts.transcript > 0,
+          result: counts.failed ? 'failed' : counts.partial ? 'partial' : 'completed',
+        });
       });
     } catch (err) {
       if (err instanceof HostAccessNeeded) resumeQueue.current = true;
+      else
+        trace.current('run_finished', {
+          result: abort.signal.aborted ? 'cancelled' : 'failed',
+          code: classifyError(err),
+        });
       report(err);
     } finally {
       working.current = false;
@@ -618,6 +776,9 @@ export function VideoDownload({
         controller.current = abort;
         try {
           const next = await connect(abort.signal);
+          const address = new URL(next.url);
+          if (/(^|\.)youtube\.com$/.test(address.hostname) && address.pathname === '/playlist')
+            return;
           const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}`;
           if (automaticAttempt.current === key) return;
           automaticAttempt.current = key;
@@ -632,14 +793,54 @@ export function VideoDownload({
           working.current = true;
           setBusy(true);
           setError('');
+          trace.current = startRun('automatic');
+          trace.current('discovery', {
+            video: preferences.video,
+            transcript: preferences.transcript,
+            automatic: true,
+            adaptive: !!next.adaptive,
+          });
           await navigator.locks.request(`download-${tabId}`, { ifAvailable: true }, async lock => {
             if (!lock) throw new Error('Another download window is using this tab.');
-            await saveWithRetry(next, abort.signal);
+            const result = await saveWithRetry(next, abort.signal, {
+              video: completed?.video === true,
+              transcript: completed?.transcript === true,
+            });
+            trace.current('item_result', {
+              result: result.status,
+              video: result.saved.video,
+              transcript: result.saved.transcript,
+            });
+            const stored = (await chrome.storage.local.get(queueKey(next.url)))[
+              queueKey(next.url)
+            ] as DownloadItem[] | undefined;
+            if (stored?.length) {
+              const id = lectureId(next.url, '');
+              await persistItems(
+                stored.map(item =>
+                  item.url && lectureId(item.url, '') === id
+                    ? {
+                        ...item,
+                        status: result.status,
+                        saved: result.saved,
+                        error: result.warning || undefined,
+                      }
+                    : item
+                ),
+                next.url
+              );
+            }
+            trace.current('run_finished', {
+              result: result.status,
+              video: result.saved.video,
+              transcript: result.saved.transcript,
+            });
           });
           setContext(next);
           setSource(next.sources[0] || '');
           if (context && groupKey(context.url) !== groupKey(next.url)) setItems([]);
         } catch (err) {
+          trace.current('run_finished', { result: 'failed', code: classifyError(err) });
           report(err);
         } finally {
           working.current = false;
@@ -654,6 +855,9 @@ export function VideoDownload({
   }, [loaded, preferences, directory, access]);
 
   const validChoice = preferences.video || preferences.transcript;
+  const counts = getCounts(items, preferences);
+  const incomplete = !!listSize && listSize.loaded < listSize.expected;
+  const eligible = items.filter(item => item.available !== false);
   return (
     <main className="flex flex-col gap-3">
       <section
@@ -703,6 +907,17 @@ export function VideoDownload({
         className="te-glass p-5 flex flex-col gap-3"
       >
         <h2 className="font-semibold">{title || context?.title || 'Connect to a lecture'}</h2>
+        {listSize && listSize.expected !== listSize.unique && (
+          <p className="te-muted text-sm">
+            {listSize.loaded}/{listSize.expected} playlist entries loaded · {listSize.unique} unique
+            items
+          </p>
+        )}
+        {incomplete && (
+          <button className="te-btn" disabled={busy} onClick={() => void loadItems()}>
+            Load remaining items
+          </button>
+        )}
         {directory && (
           <p className="te-muted text-xs break-words">
             Save to {directory.name}
@@ -714,16 +929,19 @@ export function VideoDownload({
             <label>
               <input
                 type="checkbox"
-                disabled={busy}
-                checked={items.every(item => item.selected)}
+                disabled={busy || !eligible.length}
+                checked={!!eligible.length && eligible.every(item => item.selected)}
                 onChange={e =>
                   void persistItems(
-                    items.map(item => ({ ...item, selected: e.target.checked })),
+                    items.map(item => ({
+                      ...item,
+                      selected: item.available !== false && e.target.checked,
+                    })),
                     context!.url
                   ).catch(report)
                 }
               />{' '}
-              Select all ({items.length})
+              Select all ({eligible.length})
             </label>
             <ul className="flex flex-col">
               {items.map((item, index) => (
@@ -734,7 +952,7 @@ export function VideoDownload({
                   <label>
                     <input
                       type="checkbox"
-                      disabled={busy}
+                      disabled={busy || item.available === false}
                       checked={item.selected}
                       onChange={e =>
                         void persistItems(
@@ -749,7 +967,7 @@ export function VideoDownload({
                   </label>
                   <span className="te-muted text-sm">
                     {' '}
-                    — {item.status}
+                    — {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
                     {item.error ? ` · ${item.error}` : ''}
                   </span>
                 </li>
@@ -757,7 +975,17 @@ export function VideoDownload({
             </ul>
             <p className="te-muted text-xs">
               {items.filter(item => item.selected).length} selected ·{' '}
-              {items.filter(item => item.status === 'completed').length}/{items.length} completed
+              {preferences.video && (
+                <>
+                  {counts.video}/{counts.total} videos saved
+                </>
+              )}
+              {preferences.video && preferences.transcript && ' · '}
+              {preferences.transcript && (
+                <>
+                  {counts.transcript}/{counts.total} transcripts saved
+                </>
+              )}
             </p>
           </div>
         )}
@@ -765,6 +993,7 @@ export function VideoDownload({
           className="te-btn-primary"
           disabled={
             busy ||
+            incomplete ||
             !context ||
             !validChoice ||
             !items.some(

@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { VideoDownload } from './VideoDownload';
+import { flushDiagnostics, exportDiagnostics } from '../lib/diagnostics';
 import {
   loadPreferences,
   savePreferences,
@@ -124,6 +125,7 @@ beforeEach(() => {
         return {
           success: true,
           data: {
+            protocolVersion: 2,
             url: currentUrl,
             title: 'First lecture',
             sources: hasSources && !textPages.has(currentUrl) ? [videoUrl] : [],
@@ -171,6 +173,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => root.unmount());
+  await flushDiagnostics();
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -335,7 +338,7 @@ it('downloads all selected items in order and restores completed progress after 
   await render();
   await click('Choose destination folder');
   await click('Download');
-  expect(container.textContent).toContain('2/2 completed');
+  expect(container.textContent).toContain('2/2 videos saved');
   expect(Object.keys(writes)).toHaveLength(4);
   expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[1].url });
   await act(async () => {
@@ -343,7 +346,7 @@ it('downloads all selected items in order and restores completed progress after 
   });
   root = createRoot(container);
   await render();
-  expect(container.textContent).toContain('2/2 completed');
+  expect(container.textContent).toContain('2/2 videos saved');
   const resume = [...container.querySelectorAll('button')].find(
     button => button.textContent === 'Download'
   );
@@ -381,7 +384,7 @@ it('honors an unchecked item in the collection list', async () => {
   await click('Download');
   expect(Object.keys(writes)).toHaveLength(2);
   expect(chrome.tabs.update).not.toHaveBeenCalled();
-  expect(container.textContent).toContain('1/2 completed');
+  expect(container.textContent).toContain('1/2 videos saved');
 });
 it('resumes a failed queue without repeating a completed video', async () => {
   listing = [1, 2].map(id => ({
@@ -400,7 +403,7 @@ it('resumes a failed queue without repeating a completed video', async () => {
   await click('Choose destination folder');
   await click('Download');
   expect(chrome.tabs.reload).toHaveBeenCalledWith(42);
-  expect(container.textContent).toContain('2/2 completed');
+  expect(container.textContent).toContain('2/2 videos saved');
   expect(mediaCalls).toBe(3);
   expect(
     Object.keys(writes).filter(
@@ -565,7 +568,7 @@ it('requests write permission from Download and continues immediately when allow
     )
   ).toBe(false);
   await click('Download');
-  expect(hasDirectoryAccess).toHaveBeenCalledWith(expect.anything(), true);
+  expect(hasDirectoryAccess).toHaveBeenCalledWith(expect.anything(), true, expect.any(Function));
   expect(Object.keys(writes)).toHaveLength(2);
 });
 it('loads all course items automatically and selects every item initially', async () => {
@@ -899,4 +902,100 @@ it('does not start an automatic retry immediately after a manual download fails'
       button => button.textContent === 'Cancel' && !button.closest('dialog')
     )
   ).toBe(false);
+});
+
+it('counts a saved video separately from a missing transcript and preserves it on retry and reopen', async () => {
+  const { loadCourseCollection } = await import('../lib/collection-store');
+  vi.mocked(loadCourseCollection).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+  const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
+    if ((args[1] as { type: string }).type === 'EXTRACT_TRANSCRIPT')
+      return { success: false, error: 'No captions available.' };
+    return original(...args);
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toContain('0/1 transcripts saved');
+  expect(container.textContent).toContain('Finished: 1 saved');
+  const mediaCount = vi.mocked(fetch).mock.calls.length;
+  await click('Download');
+  expect(vi.mocked(fetch).mock.calls.length).toBe(mediaCount);
+  expect(Object.keys(writes).filter(name => name.endsWith('.mp4'))).toHaveLength(1);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render();
+  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toContain('0/1 transcripts saved');
+  const log = JSON.parse(await exportDiagnostics());
+  expect(
+    log.events.filter((entry: { event: string }) => entry.event === 'file_saved')
+  ).toHaveLength(1);
+});
+
+it('starts a selected series from the playlist page without requiring a manual player click', async () => {
+  currentUrl = 'https://www.youtube.com/playlist?list=PL123';
+  listing = ['first', 'last'].map(id => ({
+    id,
+    title: id,
+    url: `https://www.youtube.com/watch?v=${id}&list=PL123`,
+  }));
+  Object.assign(chrome, { scripting: { executeScript: vi.fn(async () => []) } });
+  const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
+    const reply = (await original(...args)) as unknown as {
+      success: boolean;
+      data: Record<string, unknown>;
+    };
+    const type = (args[1] as { type: string }).type;
+    if (type === 'GET_DOWNLOAD_ITEMS')
+      return {
+        ...reply,
+        data: { ...reply.data, title: 'Full series', totalItems: 2, loadedItems: 2 },
+      };
+    if (type === 'GET_HLS_DOWNLOAD_CONTEXT' && currentUrl.includes('/playlist?'))
+      return { ...reply, data: { ...reply.data, sources: [], hasPlayer: false } };
+    return reply;
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[0].url });
+  expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[1].url });
+  expect(container.textContent).toContain('2/2 videos saved');
+});
+
+it('restores already-saved artifacts even when the selected formats use a different queue key', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: false,
+    automatic: false,
+  });
+  stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1'] = {
+    video: true,
+    transcript: false,
+  };
+  await render();
+  expect(container.textContent).toContain('1/1 videos saved');
+  expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  const button = [...container.querySelectorAll('button')].find(
+    value => value.textContent === 'Download'
+  )!;
+  expect(button.disabled).toBe(true);
+});
+
+it('reloads stale page scripts automatically after an extension update', async () => {
+  vi.mocked(chrome.tabs.sendMessage).mockImplementationOnce(async () => ({
+    success: true,
+    data: {
+      url: currentUrl,
+      title: 'Old page',
+      sources: [],
+      hasPlayer: false,
+    },
+  }));
+  await render();
+  expect(chrome.tabs.reload).toHaveBeenCalledOnce();
+  expect(container.textContent).toContain('Select all (1)');
 });

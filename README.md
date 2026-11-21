@@ -103,6 +103,9 @@ The destination folder is remembered in the Chrome profile. Chrome may ask to re
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.
+Video and transcript progress are counted separately. A saved video remains counted when its
+transcript is unavailable, including after reopening the panel. Retrying that partial item attempts
+the missing transcript without downloading its video again.
 Configure the destination folder in Settings. If no folder has been configured, Download shows
 an error directing you to Settings. If the saved folder needs renewed access, Download opens
 Chrome's native permission dialog and continues immediately when access is granted.
@@ -126,7 +129,11 @@ separate audio/video playlists and discontinuities requiring additional remuxing
 
 Open a YouTube watch page or Short in the Chrome profile where you are signed in, then open the
 extension. The same Download action, destination folder, automatic mode and playlist selection are used.
-Playlist navigation retains its playlist ID. The list reflects the items rendered in YouTube's playlist panel.
+Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
+The extension scrolls the playlist to load lazy rows, restores its scroll position, and compares the loaded
+count with YouTube's declared count when available. Incomplete lists show **Load remaining items**;
+duplicates are counted as unique downloads and unavailable entries remain visible as skipped items.
+Automatic mode waits for a video page; it does not try to download the playlist page as a video.
 
 The extension reads formats from the current page's player and correlates them with requests the player
 has already made. Requests use the current Chrome session; cookies are not exported to a local application
@@ -152,6 +159,20 @@ YouTube video can be downloaded.
 Implementation references: [Chrome scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting),
 [Mediabunny media writing](https://mediabunny.dev/guide/writing-media-files).
 SABR protocol reader: [GoogleVideo](https://github.com/LuanRT/googlevideo) (MIT, bundled locally).
+
+### Download diagnostics
+
+Open the gear button → **Diagnostics** → **Download diagnostic log** to save a JSON support file.
+Recording starts with this version and persists in the Chrome profile. The bounded log retains permission
+requests/results, CDN origin patterns, response codes, retries and saved-file status. It excludes cookies,
+tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
+first when the 1,000-entry limit is reached, preserving permission and result events where possible.
+
+YouTube CDN access is requested for `https://*.googlevideo.com/*` when a new grant is needed, so changing
+video servers does not require a new grant for each hostname. Existing grants are checked through Chrome;
+folder permission is requested only if Chrome reports it is not already granted. The application access
+dialog and Chrome's native confirmation can both appear during an initial grant. The log distinguishes
+host access, folder access and server failures after permission has been granted.
 Incomplete video files are removed after a failure.
 
 Preferences, the folder handle, progress and installation ID remain in the same Chrome profile

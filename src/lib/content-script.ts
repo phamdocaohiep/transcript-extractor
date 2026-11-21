@@ -54,6 +54,7 @@ export interface ContentScriptMessage {
     | 'GET_HLS_DOWNLOAD_CONTEXT'
     | 'PREPARE_DOWNLOAD'
     | 'GET_DOWNLOAD_ITEMS'
+    | 'CANCEL_DOWNLOAD_ITEMS'
     | 'OPEN_DOWNLOAD_ITEM'
     | 'CHECK_AVAILABILITY'
     | 'START_BATCH_COLLECTION'
@@ -83,6 +84,7 @@ export interface ContentScriptResponse {
 class ContentScript {
   private isInitialized = false;
   private isPriming = false;
+  private listController?: AbortController;
   private hlsSources = createHlsDiscovery();
   private batchState: {
     isActive: boolean;
@@ -157,9 +159,23 @@ class ContentScript {
       
       switch (message.type) {
         case 'GET_DOWNLOAD_ITEMS': {
-          if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.expandAllSections();
-          const structure = await this.extractCourseStructure();
-          sendResponse({ success: true, data: structure });
+          this.listController?.abort();
+          const controller = new AbortController();
+          this.listController = controller;
+          try {
+            if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.expandAllSections();
+            if (YouTubeExtractor.isPlaylistPage()) await YouTubeExtractor.loadAllItems(controller.signal);
+            controller.signal.throwIfAborted();
+            const structure = await this.extractCourseStructure();
+            sendResponse({ success: true, data: structure });
+          } finally {
+            if (this.listController === controller) this.listController = undefined;
+          }
+          break;
+        }
+        case 'CANCEL_DOWNLOAD_ITEMS': {
+          this.listController?.abort();
+          sendResponse({ success: true });
           break;
         }
         case 'OPEN_DOWNLOAD_ITEM': {
@@ -246,6 +262,7 @@ class ContentScript {
               .find(item => lectureId(item.url, '') === lectureId(window.location.href, ''))
             : undefined;
           sendResponse({ success: true, data: {
+            protocolVersion: 2,
             url: window.location.href,
             title: this.getVideoInfo()?.title || document.title,
             sources: this.hlsSources(),
@@ -337,7 +354,7 @@ class ContentScript {
       return UdemyExtractor.extractCourseStructure();
     }
     
-    if (YouTubeExtractor.isYouTubeVideoPage()) {
+    if (YouTubeExtractor.isYouTubeVideoPage() || YouTubeExtractor.isPlaylistPage()) {
       // Try to extract playlist first
       const playlist = YouTubeExtractor.extractPlaylist();
       if (playlist && playlist.videos.length > 0) {
@@ -349,7 +366,8 @@ class ContentScript {
           url: video.url,
           isCompleted: false,
           duration: video.duration || 'Unknown',
-          isCurrentVideo: video.isCurrentVideo
+          isCurrentVideo: video.isCurrentVideo,
+          available: !video.unavailable,
         }));
 
         // Find current video
@@ -357,6 +375,8 @@ class ContentScript {
         
         return {
           title: playlist.title,
+          totalItems: playlist.expectedVideos || playlist.totalVideos,
+          loadedItems: playlist.totalVideos,
           instructor: 'YouTube Creator',
           sections: [{
             title: 'Playlist Videos',
@@ -372,6 +392,8 @@ class ContentScript {
         };
       }
       
+      if (YouTubeExtractor.isPlaylistPage())
+        throw new Error('No playlist items were found yet. Open the playlist page and reload the list.');
       // Fallback: if no playlist found, return single video structure
       const videoInfo = YouTubeExtractor.getCurrentVideoInfo();
       if (videoInfo) {
