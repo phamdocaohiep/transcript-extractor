@@ -169,8 +169,10 @@ requests/results, CDN origin patterns, response codes, retries and saved-file st
 tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
 first when the 1,000-entry limit is reached, preserving permission and result events where possible.
 
-YouTube CDN access is requested for `https://*.googlevideo.com/*` when a new grant is needed, so changing
-video servers does not require a new grant for each hostname. Existing grants are checked through Chrome;
+YouTube CDN access for `https://*.googlevideo.com/*` is declared with the extension's required host permissions.
+Chrome may ask for approval when installing or updating this permission; downloads reuse the family grant
+without asking for each video or server. If site access is withheld, the extension requests it before continuing.
+Existing grants are checked through Chrome;
 folder permission is requested only if Chrome reports it is not already granted. The application access
 dialog and Chrome's native confirmation can both appear during an initial grant. The log distinguishes
 host access, folder access and server failures after permission has been granted.
@@ -421,7 +423,7 @@ Everything runs on your machine, and the build enforces it:
 - No library uploads or analytics; source-platform caption requests may occur during extraction
 - No telemetry, analytics, crash reporting or remote configuration
 - No account, ever
-- Host permissions limited to the three supported platforms; **no all-URLs permission**, and
+- Required host permissions cover the three supported platforms and YouTube's Googlevideo CDN; **no all-URLs permission**, and
   `check:store` fails the build if one appears
 - CSP is `script-src 'self'` — no `wasm-unsafe-eval`, because nothing evaluates generated code
 

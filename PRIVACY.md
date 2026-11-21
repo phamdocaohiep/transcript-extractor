@@ -85,6 +85,7 @@ rest of the extension is unaffected.
 | `unlimitedStorage` | Keep captured screenshots; the default 10 MB cap holds only a few |
 | `clipboardWrite` | Copy a transcript when you ask for it |
 | Host access to `udemy.com`, `coursera.org`, `youtube.com` | Read transcripts on those sites |
+| Host access to `*.googlevideo.com` | Download YouTube video and audio using the signed-in browser session without repeated per-server permission requests |
 
 The extension does **not** request persistent access to all websites. It runs
 automatically on the three listed platforms. When you explicitly invoke it on

@@ -1030,7 +1030,7 @@ export function VideoDownload({
           </p>
           <ul>
             {hosts.map(host => (
-              <li key={host}>{new URL(host).hostname}</li>
+              <li key={host}>{host.replace(/^https:\/\//, '').replace(/\/\*$/, '')}</li>
             ))}
           </ul>
           {accessError && <p role="alert">{accessError}</p>}

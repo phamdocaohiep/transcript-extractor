@@ -277,6 +277,37 @@ it('refuses a player using DRM without fetching its manifest', async () => {
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it('reuses one CDN family grant throughout the queue and displays the wildcard correctly', async () => {
+  let granted = false;
+  videoUrl = 'https://r1.googlevideo.com/index.m3u8';
+  listing.push({
+    id: '2',
+    title: 'Second lecture',
+    url: 'https://www.udemy.com/course/test/learn/lecture/2',
+  });
+  vi.mocked(chrome.permissions.contains).mockImplementation(
+    async query => granted && query.origins?.[0] === 'https://*.googlevideo.com/*'
+  );
+  vi.mocked(chrome.permissions.request).mockImplementation(async () => {
+    granted = true;
+    videoUrl = 'https://r2.googlevideo.com/index.m3u8';
+    return true;
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  const dialog = container.querySelector('dialog')!;
+  expect(dialog.open).toBe(true);
+  expect(dialog.textContent).toContain('*.googlevideo.com');
+  expect(dialog.textContent).not.toContain('%2A');
+  await click('Allow listed video hosts');
+  expect(chrome.permissions.request).toHaveBeenCalledExactlyOnceWith({
+    origins: ['https://*.googlevideo.com/*'],
+  });
+  expect(dialog.open).toBe(false);
+  expect(container.textContent).toContain('2/2 videos saved');
+});
+
 it('downloads video without extracting or requiring transcript when only video is selected', async () => {
   vi.mocked(loadPreferences).mockResolvedValue({
     video: true,
