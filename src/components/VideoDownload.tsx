@@ -914,9 +914,15 @@ export function VideoDownload({
           </p>
         )}
         {incomplete && (
-          <button className="te-btn" disabled={busy} onClick={() => void loadItems()}>
-            Load remaining items
-          </button>
+          <div className="flex flex-col gap-2">
+            <p className="te-muted text-sm" role="status">
+              Some playlist entries have not loaded. You can download the selected items now or load
+              the remaining entries first.
+            </p>
+            <button className="te-btn" disabled={busy} onClick={() => void loadItems()}>
+              Load remaining items
+            </button>
+          </div>
         )}
         {directory && (
           <p className="te-muted text-xs break-words">
@@ -993,7 +999,6 @@ export function VideoDownload({
           className="te-btn-primary"
           disabled={
             busy ||
-            incomplete ||
             !context ||
             !validChoice ||
             !items.some(

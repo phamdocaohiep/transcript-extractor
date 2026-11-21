@@ -934,37 +934,45 @@ it('counts a saved video separately from a missing transcript and preserves it o
   ).toHaveLength(1);
 });
 
-it('starts a selected series from the playlist page without requiring a manual player click', async () => {
-  currentUrl = 'https://www.youtube.com/playlist?list=PL123';
-  listing = ['first', 'last'].map(id => ({
-    id,
-    title: id,
-    url: `https://www.youtube.com/watch?v=${id}&list=PL123`,
-  }));
-  Object.assign(chrome, { scripting: { executeScript: vi.fn(async () => []) } });
-  const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
-  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
-    const reply = (await original(...args)) as unknown as {
-      success: boolean;
-      data: Record<string, unknown>;
-    };
-    const type = (args[1] as { type: string }).type;
-    if (type === 'GET_DOWNLOAD_ITEMS')
-      return {
-        ...reply,
-        data: { ...reply.data, title: 'Full series', totalItems: 2, loadedItems: 2 },
+it.each([2, 3])(
+  'downloads loaded selections from a playlist declaring %i entries without a manual player click',
+  async totalItems => {
+    currentUrl = 'https://www.youtube.com/playlist?list=PL123';
+    listing = ['first', 'last'].map(id => ({
+      id,
+      title: id,
+      url: `https://www.youtube.com/watch?v=${id}&list=PL123`,
+    }));
+    Object.assign(chrome, { scripting: { executeScript: vi.fn(async () => []) } });
+    const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+    vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
+      const reply = (await original(...args)) as unknown as {
+        success: boolean;
+        data: Record<string, unknown>;
       };
-    if (type === 'GET_HLS_DOWNLOAD_CONTEXT' && currentUrl.includes('/playlist?'))
-      return { ...reply, data: { ...reply.data, sources: [], hasPlayer: false } };
-    return reply;
-  });
-  await render();
-  await click('Choose destination folder');
-  await click('Download');
-  expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[0].url });
-  expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[1].url });
-  expect(container.textContent).toContain('2/2 videos saved');
-});
+      const type = (args[1] as { type: string }).type;
+      if (type === 'GET_DOWNLOAD_ITEMS')
+        return {
+          ...reply,
+          data: { ...reply.data, title: 'Full series', totalItems, loadedItems: 2 },
+        };
+      if (type === 'GET_HLS_DOWNLOAD_CONTEXT' && currentUrl.includes('/playlist?'))
+        return { ...reply, data: { ...reply.data, sources: [], hasPlayer: false } };
+      return reply;
+    });
+    await render();
+    if (totalItems > 2) {
+      expect(container.textContent).toContain('2/3 playlist entries loaded');
+      expect(container.textContent).toContain('You can download the selected items now');
+      expect(container.textContent).toContain('Load remaining items');
+    }
+    await click('Choose destination folder');
+    await click('Download');
+    expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[0].url });
+    expect(chrome.tabs.update).toHaveBeenCalledWith(42, { url: listing[1].url });
+    expect(container.textContent).toContain('2/2 videos saved');
+  }
+);
 
 it('restores already-saved artifacts even when the selected formats use a different queue key', async () => {
   vi.mocked(loadPreferences).mockResolvedValue({

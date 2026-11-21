@@ -131,7 +131,8 @@ Open a YouTube watch page or Short in the Chrome profile where you are signed in
 extension. The same Download action, destination folder, automatic mode and playlist selection are used.
 Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
 The extension scrolls the playlist to load lazy rows, restores its scroll position, and compares the loaded
-count with YouTube's declared count when available. Incomplete lists show **Load remaining items**;
+count with YouTube's declared count when available. Incomplete lists show a warning and **Load remaining items**
+while still allowing the loaded selections to download;
 duplicates are counted as unique downloads and unavailable entries remain visible as skipped items.
 Automatic mode waits for a video page; it does not try to download the playlist page as a video.
 
