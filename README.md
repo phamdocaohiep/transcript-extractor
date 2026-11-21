@@ -137,14 +137,21 @@ completeness, and combined inside the extension. AVC/AAC is preferred when avail
 outputs retain the original codecs. Temporary track files are removed on success, failure or cancellation.
 Transcript failures do not prevent saving the video.
 
-This supports finite files exposed by the signed-in player. It does not evaluate downloaded player
-scripts, invent missing signatures, bypass DRM, or implement SABR/UMP-only delivery. A video that does
-not expose a complete usable video/audio pair is reported as unsupported. Live account playback still
+SABR/UMP playback uses a bundled protocol reader and the current player's captured request context.
+A small observer runs at document start on YouTube and leaves the player's requests and responses unchanged.
+The playback context stays in memory and is not included in settings, queue records or logs. A page already
+open before the extension update is reloaded automatically to load the observer. Both tracks are consumed
+concurrently, checked against the advertised duration, and combined using the same browser-only muxer.
+
+This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,
+or run the Python/Node/FFmpeg backend used by a desktop downloader. If the player's current session cannot
+be captured, the error includes counts and observer state without credentials. Live account playback still
 needs verification in Chrome before release; fixture and decoder tests do not establish that every
 YouTube video can be downloaded.
 
 Implementation references: [Chrome scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting),
 [Mediabunny media writing](https://mediabunny.dev/guide/writing-media-files).
+SABR protocol reader: [GoogleVideo](https://github.com/LuanRT/googlevideo) (MIT, bundled locally).
 Incomplete video files are removed after a failure.
 
 Preferences, the folder handle, progress and installation ID remain in the same Chrome profile

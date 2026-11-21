@@ -231,3 +231,154 @@ it('can combine an MP4 picture track with a WebM Opus audio track', async () => 
     input.dispose();
   }
 });
+
+it('consumes independent streaming tracks concurrently and validates the full duration', async () => {
+  const source = (bytes: Uint8Array) =>
+    new ReadableStream<ArrayBufferView>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+  await saveTracks(plan, vi.fn(), destination, new AbortController().signal, vi.fn(), vi.fn(), {
+    video: source(picture),
+    audio: source(sound),
+    duration: 1,
+  });
+  const input = new Input({
+    source: new BlobSource(new File([output as BlobPart], 'result.mp4')),
+    formats: [MP4],
+  });
+  try {
+    expect(await input.getPrimaryVideoTrack()).not.toBeNull();
+    expect(await input.getPrimaryAudioTrack()).not.toBeNull();
+    expect(await input.computeDuration()).toBeGreaterThanOrEqual(1);
+  } finally {
+    input.dispose();
+  }
+  expect(files.size).toBe(0);
+});
+
+it('rejects a streaming response that finishes before the advertised duration', async () => {
+  const source = (bytes: Uint8Array) =>
+    new ReadableStream<ArrayBufferView>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+  await expect(
+    saveTracks(plan, vi.fn(), destination, new AbortController().signal, vi.fn(), vi.fn(), {
+      video: source(picture),
+      audio: source(sound),
+      duration: 60,
+    })
+  ).rejects.toThrow('before the full video');
+  expect(files.size).toBe(0);
+});
+
+it('downloads an actual UMP-encoded SABR response and combines both media tracks', async () => {
+  const { saveAdaptive, selectAdaptive } = await import('./adaptive-stream');
+  const { CompositeBuffer, UmpWriter } = await import('googlevideo/ump');
+  const { UMPPartId, FormatInitializationMetadata, MediaHeader, VideoPlaybackAbrRequest } =
+    await import('googlevideo/protos');
+  const buffer = new CompositeBuffer();
+  const writer = new UmpWriter(buffer);
+  for (const [headerId, itag, data, mimeType] of [
+    [1, 137, picture, 'video/mp4'],
+    [2, 140, sound, 'audio/mp4'],
+  ] as const) {
+    const formatId = { itag, lastModified: '1', xtags: '' };
+    writer.write(
+      UMPPartId.FORMAT_INITIALIZATION_METADATA,
+      FormatInitializationMetadata.encode({
+        videoId: 'example',
+        formatId,
+        mimeType,
+        endSegmentNum: '1',
+        endTimeTicks: '1000',
+        endTimeTimescale: '1000',
+      }).finish()
+    );
+    writer.write(
+      UMPPartId.MEDIA_HEADER,
+      MediaHeader.encode({
+        headerId,
+        videoId: 'example',
+        itag,
+        formatId,
+        segmentNum: 1,
+        isInitializationSegment: false,
+        startMs: '0',
+        durationMs: '1000',
+        segmentLengthBytes: String(data.length),
+        segmentByteRangeStart: '0',
+        timeRange: { startTicks: '0', durationTicks: '1000', timescale: 1000 },
+      }).finish()
+    );
+    writer.write(UMPPartId.MEDIA, new Uint8Array([headerId, ...data]));
+    writer.write(UMPPartId.MEDIA_END, new Uint8Array([headerId]));
+  }
+  const response = new Uint8Array(buffer.getLength());
+  let position = 0;
+  for (const chunk of buffer.chunks) {
+    response.set(chunk, position);
+    position += chunk.length;
+  }
+  const selected = selectAdaptive({
+    videoId: 'example',
+    url: 'https://r1.googlevideo.com/videoplayback?ump=1',
+    config: 'AQI=',
+    token: 'AwQ=',
+    duration: 1,
+    clientInfo: { clientName: 1, clientVersion: 'fixture' },
+    formats: [
+      {
+        itag: 137,
+        lastModified: '1',
+        bitrate: 1000,
+        mimeType: 'video/mp4; codecs="avc1.640028"',
+        qualityLabel: '720p',
+        height: 720,
+        approxDurationMs: '1000',
+      },
+      {
+        itag: 140,
+        lastModified: '1',
+        bitrate: 128,
+        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+        audioQuality: 'AUDIO_QUALITY_MEDIUM',
+        approxDurationMs: '1000',
+      },
+    ],
+  })!;
+  expect(selected).not.toBeNull();
+  const request = vi.fn(async (_url: string, options: RequestInit) => {
+    const decoded = VideoPlaybackAbrRequest.decode(options.body as Uint8Array);
+    expect(decoded.streamerContext?.poToken).toEqual(new Uint8Array([3, 4]));
+    expect(decoded.selectedVideoFormatIds[0].itag).toBe(137);
+    expect(decoded.selectedAudioFormatIds[0].itag).toBe(140);
+    return new Response(response, { headers: { 'Content-Type': 'application/vnd.yt-ump' } });
+  });
+  await saveAdaptive(
+    selected,
+    request,
+    destination,
+    new AbortController().signal,
+    vi.fn(),
+    vi.fn()
+  );
+  expect(request).toHaveBeenCalledOnce();
+  const input = new Input({
+    source: new BlobSource(new File([output as BlobPart], 'result.mp4')),
+    formats: [MP4],
+  });
+  try {
+    expect(await (await input.getPrimaryVideoTrack())?.getCodec()).toBe('avc');
+    expect(await (await input.getPrimaryAudioTrack())?.getCodec()).toBe('aac');
+    expect(await input.computeDuration()).toBeGreaterThanOrEqual(1);
+  } finally {
+    input.dispose();
+  }
+  expect(files.size).toBe(0);
+});

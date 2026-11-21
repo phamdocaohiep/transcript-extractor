@@ -30,7 +30,13 @@ export async function resolvePlayback(
       if (next && lectureId(next.url, '') === lectureId(url, '')) {
         last = next;
         if (next.unavailable) throw new Error(next.unavailable);
-        if (next.protected || next.sources.length || selectStreams(next.streams || [])) return next;
+        if (
+          next.protected ||
+          next.sources.length ||
+          selectStreams(next.streams || []) ||
+          next.adaptive
+        )
+          return next;
         if (
           !next.loading &&
           next.hasPlayer === false &&
@@ -64,7 +70,7 @@ export async function resolvePlayback(
     return last;
   if (last?.streams)
     throw new MissingStreamError(
-      'The YouTube player did not expose a complete downloadable video and audio pair after reloading.'
+      `Could not prepare this video's playback session after reloading. ${last.diagnostics || 'The player did not expose complete video and audio streams.'}`
     );
   throw new MissingStreamError('The player has no supported HLS or MP4 stream after reloading.');
 }

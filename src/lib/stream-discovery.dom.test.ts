@@ -133,3 +133,84 @@ it('reports SABR-only delivery instead of saving an UMP response as video', () =
   expect(readStreams().unavailable).toBeUndefined();
   expect(readStreams().streams).toEqual([]);
 });
+
+it('uses the current captured SABR session even when formats have no direct URLs', () => {
+  response.videoDetails = { videoId: 'example', lengthSeconds: '60' };
+  response.streamingData = {
+    adaptiveFormats: [
+      {
+        itag: 137,
+        lastModified: '1',
+        mimeType: 'video/mp4; codecs="avc1.640028"',
+        qualityLabel: '1080p',
+        height: 1080,
+      },
+      {
+        itag: 140,
+        lastModified: '2',
+        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+        audioQuality: 'AUDIO_QUALITY_MEDIUM',
+      },
+    ],
+  };
+  Object.assign(window, {
+    __tePlaybackRequest: {
+      installed: true,
+      session: {
+        videoId: 'example',
+        url: `${base}&ump=1`,
+        config: 'AQI=',
+        clientInfo: { clientName: 1 },
+        token: 'fixture',
+      },
+    },
+  });
+  try {
+    const result = readStreams();
+    expect(result.streams).toEqual([]);
+    expect(result.adaptive?.formats).toHaveLength(2);
+    expect(result.diagnostics).toContain('playback session captured');
+    expect(result.diagnostics).not.toContain('fixture');
+    window.history.replaceState({}, '', '/watch?v=other');
+    expect(readStreams().adaptive).toBeUndefined();
+  } finally {
+    delete (window as Window & { __tePlaybackRequest?: unknown }).__tePlaybackRequest;
+  }
+});
+
+it('waits for both format descriptions and rejects mismatched playback configurations', () => {
+  response.videoDetails = { videoId: 'example', lengthSeconds: '60' };
+  response.streamingData = {
+    adaptiveFormats: [
+      { itag: 137, lastModified: '1', mimeType: 'video/mp4', qualityLabel: '720p' },
+    ],
+  };
+  Object.assign(window, {
+    __tePlaybackRequest: {
+      installed: true,
+      session: {
+        videoId: 'example',
+        url: `${base}&ump=1`,
+        config: 'AQI=',
+        clientInfo: { clientName: 1 },
+      },
+    },
+  });
+  try {
+    expect(readStreams().adaptive).toBeUndefined();
+    (response.streamingData as { adaptiveFormats: unknown[] }).adaptiveFormats.push({
+      itag: 140,
+      lastModified: '1',
+      mimeType: 'audio/mp4',
+      audioQuality: 'AUDIO_QUALITY_MEDIUM',
+    });
+    response.playerConfig = {
+      mediaCommonConfig: {
+        mediaUstreamerRequestConfig: { videoPlaybackUstreamerConfig: 'different' },
+      },
+    };
+    expect(readStreams().adaptive).toBeUndefined();
+  } finally {
+    delete (window as Window & { __tePlaybackRequest?: unknown }).__tePlaybackRequest;
+  }
+});

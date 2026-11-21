@@ -29,40 +29,72 @@ export async function saveTracks(
   destination: FileSystemWritableFileStream,
   signal: AbortSignal,
   progress: (completed: number, total: number, bytes: number) => void,
-  notice: (value: string) => void
+  notice: (value: string) => void,
+  streaming?: {
+    video: ReadableStream<ArrayBufferView>;
+    audio: ReadableStream<ArrayBufferView>;
+    duration: number;
+  }
 ) {
   const storage = await navigator.storage.getDirectory();
   const names: string[] = [];
   const inputs: Input[] = [];
   let output: Output | undefined;
   let finalized = false;
-  let bytes = 0;
+  const counts = [0, 0];
+  const completed = [false, false];
+  const transferAbort = new AbortController();
+  const token = AbortSignal.any([signal, transferAbort.signal]);
   const total = plan.audio ? 2 : 1;
-  const stage = async (stream: StreamInfo, index: number) => {
+  const stage = async (
+    stream: StreamInfo,
+    index: number,
+    source?: ReadableStream<ArrayBufferView>
+  ) => {
     const name = `media-${crypto.randomUUID()}`;
     names.push(name);
     const handle = await storage.getFileHandle(name, { create: true });
     const writer = await handle.createWritable();
-    let received = 0;
+    const update = (count: number) => {
+      counts[index] = count;
+      progress(completed.filter(Boolean).length, total, counts[0] + counts[1]);
+    };
     try {
-      await writeStream(
-        stream,
-        fetchPart,
-        chunk => writer.write(chunk as BufferSource),
-        signal,
-        count => {
-          received = count;
-          progress(index, total, bytes + count);
+      if (source) {
+        const reader = source.getReader();
+        const cancel = () => {
+          void reader.cancel(token.reason).catch(() => undefined);
+        };
+        token.addEventListener('abort', cancel, { once: true });
+        try {
+          while (true) {
+            token.throwIfAborted();
+            const { value, done } = await reader.read();
+            if (done) break;
+            const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+            await writer.write(bytes as BufferSource);
+            update(counts[index] + bytes.length);
+          }
+        } finally {
+          token.removeEventListener('abort', cancel);
+          await reader.cancel().catch(() => undefined);
         }
-      );
-      signal.throwIfAborted();
+      } else
+        await writeStream(
+          stream,
+          fetchPart,
+          chunk => writer.write(chunk as BufferSource),
+          token,
+          update
+        );
+      token.throwIfAborted();
       await writer.close();
     } catch (error) {
       await writer.abort().catch(() => undefined);
       throw error;
     }
-    bytes += received;
-    progress(index + 1, total, bytes);
+    completed[index] = true;
+    update(counts[index]);
     const input = new Input({
       source: new BlobSource(await handle.getFile()),
       formats: [MP4, WEBM],
@@ -72,8 +104,24 @@ export async function saveTracks(
   };
   try {
     notice('Downloading video…');
-    const first = await stage(plan.video, 0);
-    const second = plan.audio ? await stage(plan.audio, 1) : first;
+    let first: Input;
+    let second: Input;
+    if (streaming && plan.audio) {
+      const transfers = [
+        stage(plan.video, 0, streaming.video),
+        stage(plan.audio, 1, streaming.audio),
+      ];
+      try {
+        [first, second] = await Promise.all(transfers);
+      } catch (error) {
+        transferAbort.abort(error);
+        await Promise.allSettled(transfers);
+        throw error;
+      }
+    } else {
+      first = await stage(plan.video, 0);
+      second = plan.audio ? await stage(plan.audio, 1) : first;
+    }
     notice(`Combining video and audio into ${plan.extension.toUpperCase()}…`);
     const video = await first.getPrimaryVideoTrack();
     const audio = await second.getPrimaryAudioTrack();
@@ -81,6 +129,11 @@ export async function saveTracks(
       throw new Error(
         'Both video and audio tracks are required. The server returned an incomplete media file.'
       );
+    if (streaming) {
+      const minimum = streaming.duration - Math.max(1, streaming.duration * 0.005);
+      if ((await video.computeDuration()) < minimum || (await audio.computeDuration()) < minimum)
+        throw new Error('The playback stream ended before the full video was downloaded.');
+    }
     const videoCodec = await video.getCodec();
     const audioCodec = await audio.getCodec();
     const format =

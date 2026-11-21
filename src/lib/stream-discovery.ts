@@ -1,3 +1,6 @@
+import type { FormatStream } from 'googlevideo/shared-types';
+import type { AdaptiveInfo, RequestState } from './playback-session';
+
 export interface StreamInfo {
   url: string;
   mimeType: string;
@@ -8,7 +11,7 @@ export interface StreamInfo {
   size?: number;
 }
 
-interface Format {
+interface Format extends Partial<FormatStream> {
   itag?: number;
   url?: string;
   signatureCipher?: string;
@@ -22,7 +25,15 @@ interface Format {
   drmFamilies?: unknown[];
 }
 interface ResponseInfo {
-  videoDetails?: { videoId?: string; title?: string; isLiveContent?: boolean };
+  videoDetails?: {
+    videoId?: string;
+    title?: string;
+    isLiveContent?: boolean;
+    lengthSeconds?: string;
+  };
+  playerConfig?: {
+    mediaCommonConfig?: { mediaUstreamerRequestConfig?: { videoPlaybackUstreamerConfig?: string } };
+  };
   playabilityStatus?: { status?: string; reason?: string };
   streamingData?: {
     formats?: Format[];
@@ -38,6 +49,8 @@ export function readStreams(): {
   title: string;
   streams: StreamInfo[];
   unavailable?: string;
+  adaptive?: AdaptiveInfo;
+  diagnostics?: string;
 } {
   const current = new URL(location.href);
   const id = current.searchParams.get('v') || current.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
@@ -145,7 +158,57 @@ export function readStreams(): {
       size: Number.isSafeInteger(size) && size > 0 ? size : undefined,
     });
   }
-  return { url: current.href, title, streams };
+  const state = (window as Window & { __tePlaybackRequest?: RequestState }).__tePlaybackRequest;
+  const session = state?.session;
+  const expected =
+    response.playerConfig?.mediaCommonConfig?.mediaUstreamerRequestConfig
+      ?.videoPlaybackUstreamerConfig;
+  const normalize = (value: string) =>
+    value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  const duration =
+    Number(response.videoDetails?.lengthSeconds) ||
+    Math.max(0, ...formats.map(format => Number(format.approxDurationMs || 0) / 1000));
+  const adaptive: AdaptiveInfo | undefined =
+    session?.videoId === id &&
+    duration > 0 &&
+    formats.some(
+      format =>
+        format.lastModified && !format.drmFamilies?.length && format.mimeType?.startsWith('video/')
+    ) &&
+    formats.some(
+      format =>
+        format.lastModified && !format.drmFamilies?.length && format.mimeType?.startsWith('audio/')
+    ) &&
+    (!expected || normalize(expected) === normalize(session.config))
+      ? {
+          ...session,
+          duration,
+          formats: formats
+            .filter(
+              format =>
+                !format.drmFamilies?.length && format.itag && format.lastModified && format.mimeType
+            )
+            .map(format => ({
+              itag: format.itag!,
+              lastModified: format.lastModified,
+              mimeType: format.mimeType,
+              bitrate: format.bitrate || 0,
+              width: format.width,
+              height: format.height,
+              fps: format.fps,
+              quality: format.quality,
+              qualityLabel: format.qualityLabel,
+              audioQuality: format.audioQuality,
+              audioChannels: format.audioChannels,
+              approxDurationMs: format.approxDurationMs || String(duration * 1000),
+              contentLength: format.contentLength,
+              xtags: format.xtags,
+              audioTrack: format.audioTrack ? { id: format.audioTrack.id } : undefined,
+            })),
+        }
+      : undefined;
+  const diagnostics = `${formats.length} formats; ${streams.length} direct streams; ${response.streamingData?.serverAbrStreamingUrl ? 'SABR available' : 'SABR not advertised'}; observer ${state?.installed ? 'active' : 'not loaded'}; playback session ${adaptive ? 'captured' : 'not captured'}.`;
+  return { url: current.href, title, streams, adaptive, diagnostics };
 }
 
 /** Prefer AVC/AAC when exposed, without discarding AV1 or Opus playback formats. */

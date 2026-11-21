@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
-import { HostAccessNeeded, prepareVideo, saveDownload, completionKey } from '../lib/download';
+import {
+  HostAccessNeeded,
+  prepareVideo,
+  saveDownload,
+  completionKey,
+  getFolderName,
+} from '../lib/download';
 import { lectureId } from '../lib/collection';
 import { loadCourseCollection } from '../lib/collection-store';
 import { groupKey } from '../lib/identity';
@@ -130,6 +136,8 @@ export function VideoDownload({
           streams: result.streams,
           unavailable: result.unavailable,
           title: result.title || next.title,
+          adaptive: result.adaptive,
+          diagnostics: result.diagnostics,
           kind: 'video',
         };
     }
@@ -285,7 +293,9 @@ export function VideoDownload({
   ) {
     if (includeVideo && next.protected)
       throw new Error('This player uses DRM. Protected video is not supported.');
-    const nextPlan = includeVideo ? await prepareVideo(selected, signal, next.streams) : null;
+    const nextPlan = includeVideo
+      ? await prepareVideo(selected, signal, next.streams, next.adaptive)
+      : null;
     let text = '';
     let warning = '';
     if (preferences.transcript) {
@@ -330,7 +340,8 @@ export function VideoDownload({
           preferences.video &&
           current.hasPlayer === false &&
           !current.sources.length &&
-          !selectStreams(current.streams || [])
+          !selectStreams(current.streams || []) &&
+          !current.adaptive
         ) {
           if (!preferences.transcript)
             return { status: 'skipped' as const, warning: 'This page has no video.' };
@@ -549,6 +560,7 @@ export function VideoDownload({
               throw new Error('The source tab left this collection.');
             setContext(current);
             setSource(current.sources[0] || '');
+            automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}`;
             const saved = await saveWithRetry(current, abort.signal);
             item.status = saved.status;
             item.error = saved.warning || undefined;
@@ -691,7 +703,12 @@ export function VideoDownload({
         className="te-glass p-5 flex flex-col gap-3"
       >
         <h2 className="font-semibold">{title || context?.title || 'Connect to a lecture'}</h2>
-        {directory && <p className="te-muted text-xs">Save to {directory.name}</p>}
+        {directory && (
+          <p className="te-muted text-xs break-words">
+            Save to {directory.name}
+            {context ? `/${getFolderName(context.url)}` : ''}
+          </p>
+        )}
         {!!items.length && (
           <div className="flex flex-col gap-3">
             <label>

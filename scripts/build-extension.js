@@ -61,6 +61,15 @@ async function buildExtension() {
     `Mediabunny ${version} (MPL-2.0). Source is included in the npm archive:\nhttps://registry.npmjs.org/mediabunny/-/mediabunny-${version}.tgz\n`
   );
   console.log('✓ Copied video converter license');
+  fs.copyFileSync(path.join(__dirname, '../node_modules/googlevideo/LICENSE'),
+    path.join(licenseDir, 'googlevideo.txt'));
+  // Protobuf's npm archive includes its BSD notice in the wire implementation.
+  const wireSource = fs.readFileSync(path.join(__dirname,
+    '../node_modules/@bufbuild/protobuf/dist/esm/wire/varint.js'), 'utf8');
+  const notice = wireSource.split('\n');
+  const end = notice.findIndex(line => !line.startsWith('//'));
+  fs.writeFileSync(path.join(licenseDir, 'protobuf-bsd.txt'),
+    notice.slice(0, end).map(line => line.replace(/^\/\/ ?/, '')).join('\n') + '\n');
 
   console.log('✓ Extension build complete!');
   console.log('📁 Extension files are in the dist/ directory');

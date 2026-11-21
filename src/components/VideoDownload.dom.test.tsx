@@ -17,6 +17,15 @@ vi.mock('../lib/preferences', () => ({
   saveDirectory: vi.fn(async () => undefined),
   hasDirectoryAccess: vi.fn(async () => true),
 }));
+vi.mock('../lib/adaptive-stream', async importOriginal => {
+  const actual = await importOriginal<typeof import('../lib/adaptive-stream')>();
+  return {
+    ...actual,
+    saveAdaptive: vi.fn(async (_plan, _fetch, destination: FileSystemWritableFileStream) => {
+      await destination.write(new Uint8Array([1, 2, 3]));
+    }),
+  };
+});
 vi.mock('../lib/track-file', () => ({
   saveTracks: vi.fn(async (_plan, _fetch, destination: FileSystemWritableFileStream) => {
     await destination.write(new Uint8Array([1, 2, 3]));
@@ -808,4 +817,86 @@ it('discovers the signed-in YouTube player in MAIN world and saves paired tracks
   );
   expect(Object.keys(writes).some(name => name.endsWith('.mp4'))).toBe(true);
   expect(container.textContent).toContain('1 saved');
+});
+
+it('downloads from a captured playback session when YouTube exposes no direct file URLs', async () => {
+  const { saveAdaptive } = await import('../lib/adaptive-stream');
+  currentUrl = 'https://www.youtube.com/watch?v=example';
+  listing = [{ id: 'example', title: 'An example', url: currentUrl }];
+  hasSources = false;
+  const getDirectoryHandle = vi.fn(async () => folder);
+  vi.mocked(loadDirectory).mockResolvedValue({
+    name: 'Previous folder',
+    getDirectoryHandle,
+  } as unknown as FileSystemDirectoryHandle);
+  const adaptive = {
+    videoId: 'example',
+    url: 'https://r1.googlevideo.com/videoplayback?ump=1',
+    config: 'AQI=',
+    token: 'private-fixture-token',
+    duration: 60,
+    clientInfo: { clientName: 1 },
+    formats: [
+      {
+        itag: 137,
+        lastModified: '1',
+        bitrate: 1000,
+        mimeType: 'video/mp4; codecs="avc1.640028"',
+        qualityLabel: '720p',
+        height: 720,
+        approxDurationMs: '60000',
+      },
+      {
+        itag: 140,
+        lastModified: '1',
+        bitrate: 128,
+        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+        audioQuality: 'AUDIO_QUALITY_MEDIUM',
+        approxDurationMs: '60000',
+      },
+    ],
+  };
+  Object.assign(chrome, {
+    scripting: {
+      executeScript: vi.fn(async () => [
+        { result: { url: currentUrl, title: 'An example', streams: [], adaptive } },
+      ]),
+    },
+  });
+  await render();
+  expect(container.textContent).toContain('Previous folder/www.youtube.com_example');
+  await click('Download');
+  expect(saveAdaptive).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'adaptive', session: adaptive }),
+    expect.any(Function),
+    expect.anything(),
+    expect.anything(),
+    expect.any(Function),
+    expect.any(Function)
+  );
+  expect(getDirectoryHandle).toHaveBeenCalledWith('www.youtube.com_example', { create: true });
+  expect(container.textContent).toContain('1 saved');
+  expect(JSON.stringify(stored)).not.toContain('private-fixture-token');
+});
+
+it('does not start an automatic retry immediately after a manual download fails', async () => {
+  vi.useFakeTimers();
+  vi.mocked(loadPreferences).mockResolvedValue({ video: true, transcript: false, automatic: true });
+  hasSources = false;
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(22000);
+  });
+  expect(container.textContent).toContain('1 failed');
+  const download = [...container.querySelectorAll('button')].find(
+    button => button.textContent === 'Download'
+  )!;
+  expect(download.disabled).toBe(false);
+  expect(
+    [...container.querySelectorAll('button')].some(
+      button => button.textContent === 'Cancel' && !button.closest('dialog')
+    )
+  ).toBe(false);
 });

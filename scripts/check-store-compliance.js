@@ -131,6 +131,7 @@ if (!failures.some((f) => f.includes('ESM syntax'))) {
 const REQUIRED = [
   'manifest.json',
   'content-script.js',
+  'playback-observer.js',
   'background.js',
   'dashboard.html',
   'video-download.html',
