@@ -38,6 +38,7 @@ type EventName =
   | 'file_saved'
   | 'list_loaded';
 interface Fields {
+  tab?: number;
   mode?: 'manual' | 'automatic' | 'list';
   source?: 'youtube' | 'udemy' | 'other';
   protocol?: 'sabr' | 'hls' | 'tracks' | 'file';
@@ -82,6 +83,7 @@ let pending = Promise.resolve();
 let writeFailures = 0;
 const originPattern = /^https:\/\/(?:\*\.)?[a-z0-9.-]+(?::\d+)?\/\*$/i;
 const numberFields = new Set([
+  'tab',
   'item',
   'total',
   'status',
@@ -184,11 +186,11 @@ function enqueue(operation: () => Promise<void>) {
   return operationResult;
 }
 
-export function startRun(mode: 'manual' | 'automatic' | 'list'): Trace {
+export function startRun(mode: 'manual' | 'automatic' | 'list', tab?: number): Trace {
   const run = crypto.randomUUID();
   const trace: Trace = (event, fields = {}) => {
     if (!events.has(event)) return;
-    const entry: Entry = { at: Date.now(), run, event, fields: sanitize(fields) };
+    const entry: Entry = { at: Date.now(), run, event, fields: sanitize({ ...fields, tab }) };
     enqueue(async () => {
       const entries = readEntries((await chrome.storage.local.get(key))[key]);
       entries.push(entry);

@@ -42,6 +42,25 @@ it('persists permission results in order and exports a readable support log', as
   expect(new Set(log.events.map((value: { run: string }) => value.run)).size).toBe(1);
   expect(log.version).toBe('4.3.0');
 });
+it('keeps simultaneous runs distinguishable by tab without storing their URLs', async () => {
+  const first = startRun('manual', 42);
+  const second = startRun('manual', 43);
+  first('file_saved', { format: 'video' });
+  second('run_paused', { code: 'host_access' });
+  const log = JSON.parse(await exportDiagnostics());
+  const runs = new Map(
+    log.events.map((entry: { run: string; fields: { tab: number } }) => [
+      entry.run,
+      entry.fields.tab,
+    ])
+  );
+  expect([...runs.values()].sort()).toEqual([42, 43]);
+  expect(
+    log.events.every(
+      (entry: { run: string; fields: { tab: number } }) => runs.get(entry.run) === entry.fields.tab
+    )
+  ).toBe(true);
+});
 it('excludes signed URLs, cookies, tokens, titles, paths and arbitrary error text', async () => {
   const trace = startRun('manual');
   trace('request_started', {

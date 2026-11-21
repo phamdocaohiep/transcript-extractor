@@ -24,6 +24,14 @@ import { getSaved, getCounts } from '../lib/result-state';
 import { startRun, classifyError, type Trace } from '../lib/diagnostics';
 
 class PageConnectionError extends Error {}
+export interface QueueState {
+  busy: boolean;
+  needsAccess: boolean;
+  title: string;
+  saved: number;
+  total: number;
+  error: boolean;
+}
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Download failed.');
 const sleep = (signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -44,10 +52,16 @@ export function VideoDownload({
   sourceTabId,
   screen = 'main',
   onBusyChange,
+  active = true,
+  settingsLocked = false,
+  onStateChange,
 }: {
   sourceTabId?: number;
   screen?: 'main' | 'settings';
   onBusyChange?: (busy: boolean) => void;
+  active?: boolean;
+  settingsLocked?: boolean;
+  onStateChange?: (tabId: number, state: QueueState) => void;
 } = {}) {
   const tabId = sourceTabId ?? Number(new URLSearchParams(location.search).get('tab'));
 
@@ -75,6 +89,27 @@ export function VideoDownload({
   const [accessError, setAccessError] = useState('');
   const [requestingAccess, setRequestingAccess] = useState(false);
   const [progress, setProgress] = useState({ completed: 0, total: 0, bytes: 0 });
+  const counts = getCounts(items, preferences);
+  useEffect(() => {
+    onStateChange?.(tabId, {
+      busy,
+      needsAccess: hosts.length > 0,
+      title: title || context?.title || '',
+      saved: counts.saved,
+      total: counts.total,
+      error: !!error,
+    });
+  }, [
+    onStateChange,
+    tabId,
+    busy,
+    hosts.length,
+    title,
+    context?.title,
+    counts.saved,
+    counts.total,
+    error,
+  ]);
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
@@ -82,13 +117,15 @@ export function VideoDownload({
   const controller = useRef<AbortController | null>(null);
   const automaticAttempt = useRef('');
   const resumeQueue = useRef(false);
+  const requesting = useRef(false);
+  const continueQueue = useRef<() => Promise<void>>(async () => undefined);
   const accessDialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = accessDialog.current;
     if (!dialog) return;
-    if (hosts.length && !dialog.open) dialog.showModal();
-    else if (!hosts.length && dialog.open) dialog.close();
-  }, [hosts]);
+    if (active && hosts.length && !dialog.open) dialog.showModal();
+    else if ((!active || !hosts.length) && dialog.open) dialog.close();
+  }, [hosts, active]);
   const settings = useRef(preferences);
   const trace = useRef<Trace>(() => undefined);
   settings.current = preferences;
@@ -257,6 +294,16 @@ export function VideoDownload({
       }
     };
     chrome.storage.onChanged.addListener(listener);
+    const directoryChanged = (event: Event) => {
+      const folder = (event as CustomEvent<FileSystemDirectoryHandle>).detail;
+      setDirectory(folder);
+      void hasDirectoryAccess(folder)
+        .then(granted => {
+          if (!disposed) setAccess(granted);
+        })
+        .catch(report);
+    };
+    window.addEventListener('download-directory-changed', directoryChanged);
     const warn = (event: BeforeUnloadEvent) => {
       if (working.current) {
         event.preventDefault();
@@ -268,6 +315,7 @@ export function VideoDownload({
       disposed = true;
       controller.current?.abort();
       chrome.storage.onChanged.removeListener(listener);
+      window.removeEventListener('download-directory-changed', directoryChanged);
       window.removeEventListener('beforeunload', warn);
     };
   }, []);
@@ -463,6 +511,7 @@ export function VideoDownload({
       const granted = await hasDirectoryAccess(folder, true);
       if (!granted) throw new Error('Write access to the selected folder was not granted.');
       await saveDirectory(folder);
+      window.dispatchEvent(new CustomEvent('download-directory-changed', { detail: folder }));
       setDirectory(folder);
       setAccess(true);
       setError('');
@@ -483,6 +532,8 @@ export function VideoDownload({
       );
       trace.current('directory_result', { configured: true, granted });
       setAccess(granted);
+      if (granted)
+        window.dispatchEvent(new CustomEvent('download-directory-changed', { detail: directory }));
       if (!granted) setError('Folder access was not granted. Click Download to try again.');
       return granted;
     } catch (err) {
@@ -491,7 +542,8 @@ export function VideoDownload({
     }
   }
   async function allowHosts() {
-    if (requestingAccess) return;
+    if (requesting.current) return;
+    requesting.current = true;
     setRequestingAccess(true);
     setAccessError('');
     try {
@@ -511,11 +563,13 @@ export function VideoDownload({
       setAccessError(errorText(err));
       report(err);
     } finally {
+      requesting.current = false;
       setRequestingAccess(false);
     }
   }
-  const queueKey = (url: string) =>
+  const legacyQueueKey = (url: string) =>
     `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}`;
+  const queueKey = (url: string) => `${legacyQueueKey(url)}:tab:${tabId}`;
   async function persistItems(value: DownloadItem[], url: string) {
     await chrome.storage.local.set({ [queueKey(url)]: value });
     setItems(value.map(item => ({ ...item })));
@@ -529,7 +583,7 @@ export function VideoDownload({
       void send('CANCEL_DOWNLOAD_ITEMS').catch(() => undefined);
     };
     abort.signal.addEventListener('abort', cancel, { once: true });
-    const listingTrace = startRun('list');
+    const listingTrace = startRun('list', tabId);
     setBusy(true);
     setError('');
     setNotice('Loading items…');
@@ -543,9 +597,12 @@ export function VideoDownload({
         (section.lectures || []).flatMap(item => (item.url ? [completionKey(item.url)] : []))
       );
       const completedFiles = keys.length ? await chrome.storage.local.get(keys) : {};
-      const stored = (await chrome.storage.local.get(queueKey(context.url)))[
-        queueKey(context.url)
-      ] as DownloadItem[] | undefined;
+      const storedQueues = await chrome.storage.local.get([
+        queueKey(context.url),
+        legacyQueueKey(context.url),
+      ]);
+      const stored = (storedQueues[queueKey(context.url)] ??
+        storedQueues[legacyQueueKey(context.url)]) as DownloadItem[] | undefined;
       const seen = new Set<string>();
       const next: DownloadItem[] = [];
       for (const section of sections) {
@@ -630,10 +687,38 @@ export function VideoDownload({
       setBusy(false);
     }
   }
+  continueQueue.current = () => runQueue(true);
+  useEffect(() => {
+    if (!hosts.length) return;
+    let disposed = false;
+    const granted = () => {
+      if (requesting.current) return;
+      void chrome.permissions
+        .contains({ origins: hosts })
+        .then(async allowed => {
+          if (!allowed || disposed || requesting.current) return;
+          setHosts([]);
+          setError('');
+          automaticAttempt.current = '';
+          trace.current('permission_result', { permission: 'host', origins: hosts, granted: true });
+          if (resumeQueue.current) {
+            resumeQueue.current = false;
+            await continueQueue.current();
+          }
+        })
+        .catch(report);
+    };
+    chrome.permissions.onAdded?.addListener(granted);
+    granted();
+    return () => {
+      disposed = true;
+      chrome.permissions.onAdded?.removeListener(granted);
+    };
+  }, [hosts]);
   async function runQueue(resume = false) {
     if (working.current || !context) return;
     working.current = true;
-    if (!resume) trace.current = startRun('manual');
+    if (!resume) trace.current = startRun('manual', tabId);
     trace.current('discovery', {
       video: preferences.video,
       transcript: preferences.transcript,
@@ -793,7 +878,7 @@ export function VideoDownload({
           working.current = true;
           setBusy(true);
           setError('');
-          trace.current = startRun('automatic');
+          trace.current = startRun('automatic', tabId);
           trace.current('discovery', {
             video: preferences.video,
             transcript: preferences.transcript,
@@ -855,7 +940,6 @@ export function VideoDownload({
   }, [loaded, preferences, directory, access]);
 
   const validChoice = preferences.video || preferences.transcript;
-  const counts = getCounts(items, preferences);
   const incomplete = !!listSize && listSize.loaded < listSize.expected;
   const eligible = items.filter(item => item.available !== false);
   return (
@@ -870,7 +954,7 @@ export function VideoDownload({
           <input
             type="checkbox"
             checked={preferences.video}
-            disabled={busy || !loaded}
+            disabled={busy || settingsLocked || !loaded}
             onChange={e => void changePreferences({ ...preferences, video: e.target.checked })}
           />{' '}
           Video (MP4 / WebM)
@@ -879,7 +963,7 @@ export function VideoDownload({
           <input
             type="checkbox"
             checked={preferences.transcript}
-            disabled={busy || !loaded}
+            disabled={busy || settingsLocked || !loaded}
             onChange={e => void changePreferences({ ...preferences, transcript: e.target.checked })}
           />{' '}
           Transcript (Markdown)
@@ -888,7 +972,7 @@ export function VideoDownload({
           <input
             type="checkbox"
             checked={preferences.automatic}
-            disabled={busy || !loaded}
+            disabled={busy || settingsLocked || !loaded}
             onChange={e => void changePreferences({ ...preferences, automatic: e.target.checked })}
           />{' '}
           Automatically download when a video becomes ready
@@ -896,7 +980,11 @@ export function VideoDownload({
         <p className="te-muted text-sm">
           Settings are saved in this Chrome profile across extension updates.
         </p>
-        <button className="te-btn" disabled={busy} onClick={() => void chooseFolder()}>
+        <button
+          className="te-btn"
+          disabled={busy || settingsLocked}
+          onClick={() => void chooseFolder()}
+        >
           {directory ? `Folder: ${directory.name} — change` : 'Choose destination folder'}
         </button>
         {!validChoice && <p role="alert">Choose video or transcript.</p>}

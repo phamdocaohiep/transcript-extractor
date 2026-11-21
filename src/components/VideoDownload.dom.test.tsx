@@ -1038,3 +1038,157 @@ it('reloads stale page scripts automatically after an extension update', async (
   expect(chrome.tabs.reload).toHaveBeenCalledOnce();
   expect(container.textContent).toContain('Select all (1)');
 });
+
+function configureParallel() {
+  const addresses: Record<number, string> = {
+    42: 'https://www.youtube.com/watch?v=first',
+    43: 'https://www.udemy.com/course/second/learn/lecture/1',
+  };
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: false,
+    automatic: false,
+  });
+  vi.mocked(loadDirectory).mockResolvedValue({
+    name: 'Shared',
+    getDirectoryHandle: vi.fn(async () => folder),
+  } as unknown as FileSystemDirectoryHandle);
+  Object.assign(chrome, { scripting: { executeScript: vi.fn(async () => []) } });
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (id, request) => {
+    const type = (request as { type: string }).type;
+    if (type === 'GET_DOWNLOAD_ITEMS')
+      return {
+        success: true,
+        data: {
+          sections: [{ lectures: [{ id: String(id), title: `Video ${id}`, url: addresses[id] }] }],
+        },
+      };
+    if (type === 'GET_HLS_DOWNLOAD_CONTEXT')
+      return {
+        success: true,
+        data: {
+          protocolVersion: 2,
+          url: addresses[id],
+          title: `Video ${id}`,
+          sources: [`https://r${id}.googlevideo.com/index.m3u8`],
+          hasPlayer: true,
+          loading: false,
+          kind: 'video',
+          protected: false,
+        },
+      };
+    return { success: true, data: 'Transcript' };
+  });
+}
+async function clickWorker(id: number, label: string) {
+  const worker = container.querySelector(`[data-worker="${id}"]`)!;
+  const button = [...worker.querySelectorAll('button')].find(
+    button => button.textContent === label && button.closest('dialog')?.open !== false
+  )!;
+  expect(button).toBeTruthy();
+  expect(button.disabled).toBe(false);
+  await act(async () => button.click());
+}
+
+it('downloads an Udemy queue while a YouTube queue is transferring and cancels only the selected queue', async () => {
+  configureParallel();
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let waiting = false;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (String(args[0]).includes('r42.googlevideo.com/a.ts')) {
+      waiting = true;
+      return new Promise<Response>((_resolve, reject) => {
+        (args[1] as RequestInit).signal!.addEventListener(
+          'abort',
+          () => reject(new DOMException('Cancelled', 'AbortError')),
+          { once: true }
+        );
+      });
+    }
+    return original(...args);
+  });
+  await act(async () =>
+    root.render(
+      <>
+        <div data-worker="42">
+          <VideoDownload sourceTabId={42} active={false} />
+        </div>
+        <div data-worker="43">
+          <VideoDownload sourceTabId={43} />
+        </div>
+      </>
+    )
+  );
+  await clickWorker(42, 'Download');
+  expect(waiting).toBe(true);
+  await clickWorker(43, 'Download');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(Object.values(writes).filter(writer => writer.close.mock.calls.length)).toHaveLength(1);
+  await clickWorker(42, 'Cancel');
+  expect(Object.values(writes).filter(writer => writer.abort.mock.calls.length)).toHaveLength(1);
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(
+    stored['download_queue:https://www.youtube.com/watch?v=first:true:false:tab:42']
+  ).toBeDefined();
+  expect(
+    stored['download_queue:https://www.udemy.com/course/second:true:false:tab:43']
+  ).toBeDefined();
+});
+
+it('keeps a background permission pause and resumes it when another queue grants the same host family', async () => {
+  configureParallel();
+  let granted = false;
+  const listeners = new Set<() => void>();
+  Object.assign(chrome.permissions, {
+    onAdded: {
+      addListener: (listener: () => void) => listeners.add(listener),
+      removeListener: (listener: () => void) => listeners.delete(listener),
+    },
+  });
+  vi.mocked(chrome.permissions.contains).mockImplementation(async () => granted);
+  vi.mocked(chrome.permissions.request).mockImplementation(async () => {
+    granted = true;
+    for (const listener of listeners) listener();
+    return true;
+  });
+  await act(async () =>
+    root.render(
+      <>
+        <div data-worker="42">
+          <VideoDownload sourceTabId={42} active={false} />
+        </div>
+        <div data-worker="43">
+          <VideoDownload sourceTabId={43} />
+        </div>
+      </>
+    )
+  );
+  await clickWorker(42, 'Download');
+  await clickWorker(43, 'Download');
+  expect(container.querySelector('[data-worker="42"] dialog')!.hasAttribute('open')).toBe(false);
+  expect(container.querySelector('[data-worker="43"] dialog')!.hasAttribute('open')).toBe(true);
+  await clickWorker(43, 'Allow listed video hosts');
+  expect(chrome.permissions.request).toHaveBeenCalledOnce();
+  expect(container.querySelector('[data-worker="42"]')!.textContent).toContain('1/1 videos saved');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+});
+it('shares a folder selected in one queue with the other registered queues', async () => {
+  configureParallel();
+  vi.mocked(loadDirectory).mockResolvedValue(null);
+  await act(async () =>
+    root.render(
+      <>
+        <div data-worker="42">
+          <VideoDownload sourceTabId={42} screen="settings" />
+        </div>
+        <div data-worker="43">
+          <VideoDownload sourceTabId={43} active={false} />
+        </div>
+      </>
+    )
+  );
+  await clickWorker(42, 'Choose destination folder');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('Folder: Lessons');
+  await clickWorker(43, 'Download');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+});

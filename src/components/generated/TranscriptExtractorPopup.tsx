@@ -35,7 +35,7 @@ import {
   getBatchState,
   BATCH_STORAGE_KEY,
 } from '../../lib/batch-service';
-import { VideoDownload } from '../VideoDownload';
+import { DownloadQueues } from '../DownloadQueues';
 import { SubscriptionSettings } from '../SubscriptionSettings';
 import { Diagnostics } from '../Diagnostics';
 import { StorageService } from '../../lib/storage-service';
@@ -295,19 +295,7 @@ export const TranscriptExtractorPopup = () => {
     };
   }, [pageUrl, courseStructure]);
 
-  const [sourceTabId, setSourceTabId] = useState<number>();
   const [downloadBusy, setDownloadBusy] = useState(false);
-  useEffect(() => {
-    if (downloadBusy) return;
-    const update = () => {
-      void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-        if (tab?.id !== undefined && tab.url?.startsWith('https:')) setSourceTabId(tab.id);
-      });
-    };
-    update();
-    chrome.tabs.onActivated.addListener(update);
-    return () => chrome.tabs.onActivated.removeListener(update);
-  }, [downloadBusy]);
   const handleStartEntireCourse = async () => {
     try {
       const service = await getExtensionService();
@@ -1819,20 +1807,14 @@ export const TranscriptExtractorPopup = () => {
   // The side panel fills the browser height and keeps the download engine mounted.
   const SHELL = 'w-full min-w-[320px] h-screen';
 
-  if (showSearch) {
-    return (
-      <div className={SHELL}>
-        <TranscriptSearch
-          lectures={searchableLectures}
-          meta={sourceMeta}
-          onClose={() => setShowSearch(false)}
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className={`te-shell ${SHELL}`}>
+    <>
+      {showSearch && (
+        <div className={SHELL}>
+          <TranscriptSearch lectures={searchableLectures} meta={sourceMeta} onClose={() => setShowSearch(false)} />
+        </div>
+      )}
+    <div className={`te-shell ${SHELL}`} style={showSearch ? { display: 'none' } : undefined}>
       {renderHeader()}
       <main className="te-scroll flex min-h-0 flex-grow flex-col gap-3 overflow-y-auto px-3.5 pb-3.5 pt-2.5">
         {unsaved && (
@@ -1890,23 +1872,12 @@ export const TranscriptExtractorPopup = () => {
 
         {view === 'settings' && <SubscriptionSettings />}
         {view === 'settings' && <Diagnostics busy={downloadBusy} />}
-        {view === 'main' && sourceTabId === undefined && (
-          <p className="te-muted text-sm">Open a video or course page to start downloading.</p>
-        )}
-        {sourceTabId !== undefined && (
-          <div>
-            <VideoDownload
-              key={sourceTabId}
-              sourceTabId={sourceTabId}
-              screen={view}
-              onBusyChange={setDownloadBusy}
-            />
-          </div>
-        )}
+        <DownloadQueues screen={view} visible={!showSearch} onBusyChange={setDownloadBusy} />
 
         {view === 'settings' && renderSettings()}
 
       </main>
     </div>
+    </>
   );
 };

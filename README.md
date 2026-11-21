@@ -129,6 +129,15 @@ separate audio/video playlists and discontinuities requiring additional remuxing
 
 Open a YouTube watch page or Short in the Chrome profile where you are signed in, then open the
 extension. The same Download action, destination folder, automatic mode and playlist selection are used.
+The **Download queues** list keeps an independent queue for each source tab. Switching between YouTube
+and Udemy tabs selects that tab's queue without cancelling downloads or permission pauses in other tabs.
+Use **Add open tabs** to register supported tabs in the current window, select a queue, and press **Download**;
+different queues can transfer concurrently. When automatic mode is enabled, registered video tabs are
+watched independently. A host grant is reused by other waiting queues. Only the selected queue shows its
+permission dialog, so a background queue does not interrupt another queue's controls.
+Folder and format settings are shared; they cannot be changed during active transfers. Queue snapshots
+are stored separately by source tab, with existing saved-artifact progress retained. Closing a source tab
+stops only its queue. Keep the extension panel open during transfers; closing or reloading it stops its workers.
 Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
 The extension scrolls the playlist to load lazy rows, restores its scroll position, and compares the loaded
 count with YouTube's declared count when available. Incomplete lists show a warning and **Load remaining items**
@@ -164,7 +173,8 @@ SABR protocol reader: [GoogleVideo](https://github.com/LuanRT/googlevideo) (MIT,
 ### Download diagnostics
 
 Open the gear button → **Diagnostics** → **Download diagnostic log** to save a JSON support file.
-Recording starts with this version and persists in the Chrome profile. The bounded log retains permission
+Recording starts with this version and persists in the Chrome profile. Runs include a numeric source-tab ID
+to distinguish concurrent queues without storing page URLs. The bounded log retains permission
 requests/results, CDN origin patterns, response codes, retries and saved-file status. It excludes cookies,
 tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
 first when the 1,000-entry limit is reached, preserving permission and result events where possible.
