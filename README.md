@@ -95,6 +95,45 @@ All of this is derived from the transcript by selection and statistics, so nothi
 
 ---
 
+## Download a video beside its transcript
+
+Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
+while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
+The destination folder is remembered in the Chrome profile. Chrome may ask to renew folder access.
+
+Main automatically loads all available items with every item selected. Uncheck anything you
+want to skip, then click **Download**. Completed items are skipped when resuming.
+Configure the destination folder in Settings. If no folder has been configured, Download shows
+an error directing you to Settings. If the saved folder needs renewed access, Download opens
+Chrome's native permission dialog and continues immediately when access is granted.
+Settings can be opened while downloading without interrupting the job.
+
+The extension primes lazy video players automatically. If a supported stream fails to appear,
+it reloads the source page once. Expired links and temporary network failures also trigger a bounded
+reload and retry. Text-only pages are skipped for video, with their transcript saved when available.
+A player that still has no supported HLS or MP4 stream is reported separately from a page without a player.
+Video pages are not skipped just because the player element has not rendered yet.
+When transcript extraction fails, the video is still saved and the item reports a partial result;
+the queue continues with the remaining items. Transcript-only downloads still report extraction failures.
+The queue continues past unsupported items and pauses for permission, authentication, subscription
+or cancellation events. Keep the side panel open until downloads finish.
+
+HLS MPEG-TS and fragmented MP4 are saved as standard MP4 with their original audio/video tracks.
+Direct MP4 is saved as supplied. Standard AES-128 HLS is supported. DRM, SAMPLE-AES, DASH, live streams,
+separate audio/video playlists and discontinuities requiring additional remuxing remain unsupported.
+Incomplete video files are removed after a failure.
+
+Preferences, the folder handle, progress and installation ID remain in the same Chrome profile
+across updates with the same extension ID. Removing the extension or clearing its storage removes them.
+Subscription polling runs at a fixed 15-minute interval in the background while Chrome is running.
+The API is currently a local simulator with active, expired, revoked and device-limit responses.
+Real account authentication and enforcement across devices require the future server API.
+
+After updating the unpacked extension, reload it in `chrome://extensions`. Clicking the icon opens
+the Main/Settings side panel alongside the website.
+
+---
+
 ## 🧠 Why there is no language model in here
 
 This is the most consequential decision in the project, and it is worth explaining properly —

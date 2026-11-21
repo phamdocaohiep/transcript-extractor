@@ -48,6 +48,20 @@ async function buildExtension() {
     console.warn('  The extension will build, but semantic search will not load.');
   }
 
+  const licenseDir = path.join(distDir, 'licenses');
+  fs.mkdirSync(licenseDir, { recursive: true });
+  const converterDir = path.join(__dirname, '../node_modules/mediabunny');
+  fs.copyFileSync(
+    path.join(converterDir, 'LICENSE'),
+    path.join(licenseDir, 'mediabunny.txt')
+  );
+  const { version } = JSON.parse(fs.readFileSync(path.join(converterDir, 'package.json'), 'utf8'));
+  fs.writeFileSync(
+    path.join(licenseDir, 'mediabunny-source.txt'),
+    `Mediabunny ${version} (MPL-2.0). Source is included in the npm archive:\nhttps://registry.npmjs.org/mediabunny/-/mediabunny-${version}.tgz\n`
+  );
+  console.log('✓ Copied video converter license');
+
   console.log('✓ Extension build complete!');
   console.log('📁 Extension files are in the dist/ directory');
   console.log('🔧 Load the dist/ folder as an unpacked extension in Chrome');

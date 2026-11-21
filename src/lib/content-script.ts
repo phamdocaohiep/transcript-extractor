@@ -1,3 +1,4 @@
+import { createHlsDiscovery } from './hls-discovery';
 import { log } from './log';
 // Content Script for Transcript Extractor Extension - v3.0.0
 // This script runs in the context of web pages
@@ -50,6 +51,10 @@ export interface ContentScriptMessage {
     | 'EXTRACT_COURSE_STRUCTURE'
     | 'EXTRACT_TRANSCRIPT'
     | 'GET_VIDEO_INFO'
+    | 'GET_HLS_DOWNLOAD_CONTEXT'
+    | 'PREPARE_DOWNLOAD'
+    | 'GET_DOWNLOAD_ITEMS'
+    | 'OPEN_DOWNLOAD_ITEM'
     | 'CHECK_AVAILABILITY'
     | 'START_BATCH_COLLECTION'
     | 'NAVIGATE_TO_NEXT_LECTURE'
@@ -77,6 +82,8 @@ export interface ContentScriptResponse {
 
 class ContentScript {
   private isInitialized = false;
+  private isPriming = false;
+  private hlsSources = createHlsDiscovery();
   private batchState: {
     isActive: boolean;
     lectureIds: string[];
@@ -149,6 +156,20 @@ class ContentScript {
     try {
       
       switch (message.type) {
+        case 'GET_DOWNLOAD_ITEMS': {
+          if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.expandAllSections();
+          const structure = await this.extractCourseStructure();
+          sendResponse({ success: true, data: structure });
+          break;
+        }
+        case 'OPEN_DOWNLOAD_ITEM': {
+          const item = message.data;
+          if (!item || typeof item.id !== 'string' || typeof item.title !== 'string')
+            throw new Error('Invalid item.');
+          const navigated = await this.navigateToBatchItem({ id: item.id, title: item.title, url: item.url, status: 'pending' });
+          sendResponse({ success: navigated, error: navigated ? undefined : 'Could not open the selected item.' });
+          break;
+        }
         case 'EXTRACT_COURSE_STRUCTURE': {
           const courseStructure = await this.extractCourseStructure();
           sendResponse({ success: true, data: courseStructure });
@@ -196,6 +217,43 @@ class ContentScript {
             (message.data?.tone as ToastTone) ?? 'ok',
           );
           sendResponse({ success: true });
+          break;
+        }
+
+        case 'PREPARE_DOWNLOAD': {
+          const video = findPrimaryVideo();
+          if (!video) {
+            document.querySelector<HTMLElement>(
+              '[data-purpose="video-play-button"], [data-purpose="play-button"], .vjs-big-play-button, button[aria-label="Play"]'
+            )?.click();
+          }
+          if (video && video.paused && !this.isPriming) {
+            this.isPriming = true;
+            // Muted playback primes players that only request a manifest on play.
+            const muted = video.muted;
+            video.muted = true;
+            void video.play().catch(() => undefined);
+            setTimeout(() => { video.pause(); video.muted = muted; this.isPriming = false; }, 3000);
+          }
+          sendResponse({ success: true });
+          break;
+        }
+
+        case 'GET_HLS_DOWNLOAD_CONTEXT': {
+          const video = findPrimaryVideo();
+          const current = UdemyExtractor.isUdemyCoursePage()
+            ? UdemyExtractor.extractCourseStructure()?.sections.flatMap(section => section.lectures)
+              .find(item => lectureId(item.url, '') === lectureId(window.location.href, ''))
+            : undefined;
+          sendResponse({ success: true, data: {
+            url: window.location.href,
+            title: this.getVideoInfo()?.title || document.title,
+            sources: this.hlsSources(),
+            protected: Boolean(video?.mediaKeys),
+            hasPlayer: Boolean(video),
+            kind: /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
+            loading: document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
+          } });
           break;
         }
 
@@ -675,7 +733,7 @@ class ContentScript {
           break;
         }
 
-        const item = state.items[state.currentIndex];
+        let item = state.items[state.currentIndex];
         if (item.status === 'completed' || item.status === 'skipped' || item.status === 'failed') {
           state.currentIndex++;
           await setBatchState(state);
@@ -684,6 +742,8 @@ class ContentScript {
         item.status = 'extracting';
         state.updatedAt = Date.now();
         await setBatchState(state);
+        // The worker acknowledgement replaces items with a deserialized copy.
+        item = state.items[state.currentIndex];
 
         showPageToast(
           `Extracting ${state.currentIndex + 1}/${state.items.length}: ${item.title.substring(0, 32)}…`,
@@ -842,7 +902,7 @@ class ContentScript {
       }
 
       const normalizeTitle = (s: string) =>
-        s.toLowerCase().replace(/^\d+[\s.-]+/, '').replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+        s.toLowerCase().replace(/^\d+[\s.-]+/, '').replace(/[^\p{L}\p{N}]/gu, ' ').replace(/\s+/g, ' ').trim();
 
       // If not found by ID, try matching item by title strictly within sidebar
       if (!targetEl && item.title) {
@@ -936,15 +996,18 @@ class ContentScript {
         }
 
         if (canClick) {
+          const previousUrl = window.location.href;
           navLink.click();
           // DO NOT dispatch a secondary MouseEvent('click') here: that causes double-clicking and opens 2 tabs!
-          await this.waitForLectureChange(3000);
+          await this.waitForLectureChange(3000, previousUrl);
 
           const currentLectureId = this.getCurrentLectureId();
           const navSucceeded =
             item.id && !item.id.startsWith('lecture-')
               ? currentLectureId === item.id
-              : lectureId(window.location.href, '') === lectureId(item.url, '');
+              : item.url
+                ? lectureId(window.location.href, '') === lectureId(item.url, '')
+                : lectureId(window.location.href, '') !== lectureId(previousUrl, '');
 
           if (navSucceeded) {
             return true;
@@ -1183,10 +1246,9 @@ class ContentScript {
     }
   }
 
-  private async waitForLectureChange(timeout = 10000): Promise<void> {
+  private async waitForLectureChange(timeout = 10000, initialUrl = window.location.href): Promise<void> {
     return new Promise((resolve) => {
       const startTime = Date.now();
-      const initialUrl = window.location.href;
       const initialLectureId = this.getCurrentLectureId();
       
       log.debug('🎯 Waiting for lecture change. Initial URL:', initialUrl, 'Initial lecture ID:', initialLectureId);

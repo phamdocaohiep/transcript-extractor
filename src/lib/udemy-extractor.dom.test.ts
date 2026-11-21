@@ -95,6 +95,10 @@ describe('extractCourseStructure', () => {
       'Backpropagation',
     ]);
     expect(course?.sections[1].lectures.map((l) => l.title)).toEqual(['Your first network']);
+    expect(course?.sections[0].lectures[0]).toMatchObject({
+      id: '1',
+      url: 'https://www.udemy.com/course/deep-learning/learn/lecture/1',
+    });
   });
 
   it('pulls the duration out of the counted section label', () => {
@@ -171,4 +175,111 @@ describe('captured untimed captions', () => {
     expect(result).toContain('<!-- timing: estimated -->');
     expect(result).toContain('First example caption.');
   });
+});
+
+
+it('uses the stable lecture ID from Udemy Business completion labels', () => {
+  document.body.innerHTML = `<div data-purpose="section-panel-1">
+    <div data-purpose="curriculum-item-0-0">
+      <span id="item-completion-state-4689848">Completed</span>
+      <span data-purpose="item-title">1. The Mind map course in a nutshell</span>
+    </div>
+  </div>`;
+  expect(UdemyExtractor.extractCourseStructure()?.sections[0].lectures[0]).toMatchObject({
+    id: '4689848',
+    url: 'https://www.udemy.com/course/deep-learning/learn/lecture/4689848',
+  });
+});
+
+it('reads the header and every chapter on a quiz page without including reminder panels', () => {
+  window.history.pushState({}, '', '/course/deep-learning/learn/quiz/99');
+  document.body.innerHTML = `
+    <header><a class="course-header-title--title--abc">Mind map for Beginners</a></header>
+    <section data-purpose="learning-section"><h2>Learning reminders</h2></section>
+    <div class="section--panel--abc">
+      <h3 class="section--section-title--abc">Introduction</h3>
+      <div data-purpose="curriculum-item-0-0">
+        <span id="item-completion-state-101"></span>
+        <span data-purpose="item-title">First video</span>
+        <svg><use xlink:href="#icon-video"></use></svg>
+      </div>
+      <div data-purpose="curriculum-item-0-1">
+        <span id="item-completion-state-99"></span>
+        <span data-purpose="item-title">Quiz</span>
+        <svg><use xlink:href="#icon-quiz"></use></svg>
+      </div>
+    </div>
+    <div class="section--panel--abc">
+      <h3 class="section--section-title--abc">Practice</h3>
+      <div class="section--section-content--abc"><div class="curriculum-item-link--curriculum-item--abc">
+        <a href="/course/deep-learning/learn/lecture/202"><span data-purpose="item-title">Second video</span></a>
+      </div></div>
+    </div>`;
+  const result = UdemyExtractor.extractCourseStructure();
+  expect(result?.title).toBe('Mind map for Beginners');
+  expect(result?.sections.map(section => section.title)).toEqual(['Introduction', 'Practice']);
+  expect(result?.sections.flatMap(section => section.lectures).map(item => [item.id, item.kind]))
+    .toEqual([['101', 'video'], ['99', 'quiz'], ['202', 'video']]);
+});
+
+it('keeps items without numeric IDs distinct across chapters', () => {
+  document.body.innerHTML = [0, 1].map(index => `
+    <div data-purpose="section-panel-${index}">
+      <div data-purpose="curriculum-item-${index}-0"><span data-purpose="item-title">Video ${index}</span></div>
+    </div>`).join('');
+  const ids = UdemyExtractor.extractCourseStructure()?.sections.flatMap(section => section.lectures.map(item => item.id));
+  expect(ids).toHaveLength(2);
+  expect(new Set(ids).size).toBe(2);
+});
+
+it('expands collapsed chapters before reading their items', async () => {
+  vi.useFakeTimers();
+  try {
+    document.body.innerHTML = `<div class="section--panel--abc"><h3>Practice</h3><button aria-expanded="false">Open</button></div>`;
+    const button = document.querySelector('button')!;
+    button.addEventListener('click', () => {
+      button.setAttribute('aria-expanded', 'true');
+      button.insertAdjacentHTML('afterend', '<div data-purpose="curriculum-item-101"><span data-purpose="item-title">Hidden video</span></div>');
+    });
+    const pending = UdemyExtractor.expandAllSections();
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(UdemyExtractor.extractCourseStructure()?.sections[0].lectures[0].title).toBe('Hidden video');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('reads visible cue text in the sidebar without toggling the open transcript closed', async () => {
+  vi.useFakeTimers();
+  try {
+    document.body.innerHTML = `<video></video><button data-purpose="transcript-toggle" aria-expanded="true">Transcript</button>
+      <div data-purpose="sidebar-content"><span data-purpose="cue-text">Caption already visible.</span></div>`;
+    Object.defineProperties(document.querySelector('video')!, { readyState: { value: 4 }, duration: { value: 120 } });
+    const click = vi.fn();
+    document.querySelector('button')!.addEventListener('click', click);
+    const pending = UdemyExtractor.extractTranscript();
+    await vi.runAllTimersAsync();
+    expect(await pending).toContain('Caption already visible.');
+    expect(click).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it('opens the transcript and waits for delayed cue rows before reading it', async () => {
+  vi.useFakeTimers();
+  try {
+    document.body.innerHTML = `<video></video><button data-purpose="transcript-toggle">Transcript</button>`;
+    Object.defineProperties(document.querySelector('video')!, { readyState: { value: 4 }, duration: { value: 120 } });
+    const button = document.querySelector('button')!;
+    Object.defineProperty(button, 'offsetParent', { get: () => document.body });
+    button.addEventListener('click', () => {
+      document.body.insertAdjacentHTML('beforeend', '<div data-purpose="transcript-panel"></div>');
+      setTimeout(() => {
+        document.querySelector('[data-purpose="transcript-panel"]')!.innerHTML = '<p data-purpose="transcript-cue">Caption loaded after navigation.</p>';
+      }, 3000);
+    });
+    const pending = UdemyExtractor.extractTranscript();
+    await vi.runAllTimersAsync();
+    expect(await pending).toContain('Caption loaded after navigation.');
+  } finally { vi.useRealTimers(); }
 });

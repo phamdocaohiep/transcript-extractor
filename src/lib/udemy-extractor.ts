@@ -18,6 +18,7 @@ export interface UdemyLecture {
   isCurrent: boolean;
   url?: string;
   transcript?: string;
+  kind?: 'video' | 'quiz' | 'article';
 }
 
 export interface UdemyCourse {
@@ -37,9 +38,9 @@ const SELECTORS = {
   VIDEO: 'video',
   
   // Course structure selectors - Updated based on actual HTML structure
-  COURSE_TITLE: 'h1[data-purpose="course-title"]',
+  COURSE_TITLE: '[data-purpose="course-header-title"], #course-header-title, .course-header-title, [class*="course-header-title"], h1[data-purpose="course-title"]',
   LECTURE_TITLE: '[data-purpose="lecture-title"]',
-  SECTION_TITLE: '.ud-accordion-panel-title',
+  SECTION_TITLE: '[data-purpose="section-title"], [class*="section--section-title"], .ud-accordion-panel-title, h3, h2, [role="heading"]',
   SIDEBAR_SECTIONS: '[data-purpose^="section-panel-"]',
   SIDEBAR_LECTURES: '[data-purpose^="curriculum-item-"]',
   LECTURE_ITEM_TITLE: '[data-purpose="item-title"]'
@@ -64,7 +65,7 @@ export class UdemyExtractor {
   static async expandAllSections(): Promise<void> {
     try {
       const collapsedTogglers = document.querySelectorAll(
-        '[data-purpose^="section-panel-"] button[aria-expanded="false"], .ud-accordion-panel-toggler[aria-expanded="false"]'
+        '[data-purpose^="section-panel"] button[aria-expanded="false"], .ud-accordion-panel-toggler[aria-expanded="false"], [class*="section--panel"] button[aria-expanded="false"], [class*="section--section"] button[aria-expanded="false"]'
       );
       if (collapsedTogglers.length === 0) return;
 
@@ -107,35 +108,25 @@ export class UdemyExtractor {
    */
   private static extractSections(): UdemySection[] {
     const sections: UdemySection[] = [];
-    let sectionElements = document.querySelectorAll(SELECTORS.SIDEBAR_SECTIONS);
-    
-    log.debug('🎯 Course structure debug - Found section elements:', sectionElements.length);
-    log.debug('🎯 Course structure debug - Section selector used:', SELECTORS.SIDEBAR_SECTIONS);
-
-    // If no sections found with current selector, try alternative selectors
-    if (sectionElements.length === 0) {
-      log.debug('🎯 Course structure debug - No sections found, trying alternative selectors...');
-      const alternativeSelectors = [
-        '[data-purpose="curriculum-section"]',
-        '.ud-accordion-panel',
-        '.curriculum-section',
-        '[data-purpose*="section"]'
-      ];
-
-      for (const selector of alternativeSelectors) {
-        const altElements = document.querySelectorAll(selector);
-        log.debug(`🎯 Course structure debug - Alternative selector "${selector}": ${altElements.length} elements`);
-        if (altElements.length > 0) {
-          sectionElements = altElements;
-          break;
-        }
+    const selector = '[data-purpose^="section-panel"], [data-purpose="curriculum-section"], .ud-accordion-panel, [class*="section--panel"], [class*="section--section"], .curriculum-section';
+    const candidates = [...document.querySelectorAll(selector)].filter(element =>
+      element.querySelector('[data-purpose="item-title"], a[href*="/learn/lecture/"], [data-purpose^="curriculum-item-"]')
+    );
+    // Keep the wrapper containing both the heading and its items, rather than
+    // a nested content wrapper which would discard the chapter name.
+    const titled = candidates.filter(element => element.querySelector(SELECTORS.SECTION_TITLE));
+    const sectionElements = candidates.filter(element => {
+      if (titled.includes(element)) {
+        return !titled.some(other => other !== element && element.contains(other));
       }
-    }
+      return !titled.some(other => other.contains(element)) &&
+        !candidates.some(other => other !== element && element.contains(other));
+    });
 
     sectionElements.forEach((sectionEl, index) => {
       const title = this.extractSectionTitle(sectionEl);
       const duration = this.extractSectionDuration(sectionEl);
-      const lectures = this.extractLectures(sectionEl);
+      const lectures = this.extractLectures(sectionEl, index);
 
       log.debug(`🎯 Course structure debug - Section ${index}:`, {
         title, 
@@ -178,25 +169,29 @@ export class UdemyExtractor {
   /**
    * Extract lectures from a section
    */
-  private static extractLectures(sectionEl: Element): UdemyLecture[] {
+  private static extractLectures(sectionEl: Element, sectionIndex = 0): UdemyLecture[] {
     const lectures: UdemyLecture[] = [];
     
     // Try multiple selectors to find lectures
     const lectureSelectors = [
       SELECTORS.SIDEBAR_LECTURES,
       '[data-purpose^="curriculum-item-"]',
+      '[class*="curriculum-item-link--curriculum-item"]',
       '.curriculum-item-link',
       '[data-purpose*="curriculum-item"]',
       'a[href*="/learn/lecture/"]',
       '.ud-accordion-panel-content a[href*="/learn/lecture/"]'
     ];
 
-    let lectureElements: NodeListOf<Element> | null = null;
+    let lectureElements: Element[] = [];
     let usedSelector = '';
 
     // Try each selector until we find lectures
     for (const selector of lectureSelectors) {
-      lectureElements = sectionEl.querySelectorAll(selector);
+      const matches = [...sectionEl.querySelectorAll(selector)];
+      lectureElements = matches.filter(element =>
+        !matches.some(other => other !== element && other.contains(element))
+      );
       if (lectureElements.length > 0) {
         usedSelector = selector;
         break;
@@ -234,9 +229,12 @@ export class UdemyExtractor {
         el.getAttribute('data-item-id') ||
         '';
 
-      const purposeMatch = rawPurpose.match(/(?:curriculum-item-|item-)?(\d{4,})/);
+      const purposeMatch = rawPurpose.match(/^(?:curriculum-item-|item-)?(\d+)$/);
       const lectureIdMatch = (rawHref || '').match(/\/learn\/lecture\/(\d+)/);
-      const id = lectureIdMatch ? lectureIdMatch[1] : (purposeMatch ? purposeMatch[1] : `lecture-${fallbackIndex}`);
+      // Udemy Business uses positional curriculum-item-0-0 attributes.
+      // Its completion label retains the real lecture ID even without a link.
+      const completionId = el.querySelector('[id^="item-completion-state-"]')?.id.match(/^item-completion-state-(\d+)$/)?.[1];
+      const id = lectureIdMatch?.[1] || completionId || purposeMatch?.[1] || `lecture-${sectionIndex}-${fallbackIndex}`;
 
       if (!url && id && !id.startsWith('lecture-') && courseSlug && typeof window !== 'undefined') {
         url = `${window.location.origin}/course/${courseSlug}/learn/lecture/${id}`;
@@ -267,6 +265,12 @@ export class UdemyExtractor {
     } else {
       lectureElements.forEach((lectureEl, index) => {
         const title = this.extractLectureTitle(lectureEl);
+        const icons = [...lectureEl.querySelectorAll('use')]
+          .map(element => element.getAttribute('href') || element.getAttribute('xlink:href') || '')
+          .join(' ');
+        const kind = lectureEl.matches('a[href*="/quiz/"]') ||
+          lectureEl.querySelector('[data-purpose="quiz-icon"], a[href*="/quiz/"]') || icons.includes('quiz')
+          ? 'quiz' : lectureEl.querySelector('[data-purpose="article-icon"]') || icons.includes('article') ? 'article' : 'video';
         const duration = this.extractLectureDuration(lectureEl);
         const isCurrent = lectureEl.classList.contains('curriculum-item-link--is-current--2mKk4') ||
                          lectureEl.classList.contains('is-current');
@@ -278,6 +282,7 @@ export class UdemyExtractor {
           duration,
           isCurrent,
           url,
+          kind,
         });
       });
     }
@@ -344,7 +349,12 @@ export class UdemyExtractor {
    */
   private static getCourseTitle(): string {
     const titleEl = document.querySelector(SELECTORS.COURSE_TITLE);
-    return titleEl?.textContent?.trim() || 'Untitled Course';
+    const title = titleEl?.textContent?.trim();
+    if (title) return title;
+    const headerLink = document.querySelector('header a[href*="/course/"]');
+    if (headerLink?.textContent?.trim()) return headerLink.textContent.trim();
+    const pageTitle = document.title.replace(/^Course:\s*/i, '').replace(/\s*[|–-]\s*Udemy(?: Business)?\s*$/i, '').trim();
+    return pageTitle || 'Untitled Course';
   }
 
   /**
@@ -664,6 +674,7 @@ export class UdemyExtractor {
         '[data-purpose^="transcript"]',
         '[class*="transcript--transcript-panel"]',
         '[class*="transcript-panel"]',
+        '[data-purpose="sidebar-content"]',
       ];
 
       const entrySelectors = [
@@ -672,6 +683,7 @@ export class UdemyExtractor {
         '.transcript--cue-container--Vuwj6',
         '.transcript-cue',
         '[class*="cue-container"]',
+        '[data-purpose="cue-text"]',
       ];
 
       /**
@@ -1034,6 +1046,8 @@ export class UdemyExtractor {
    */
   private static async ensureTranscriptActive(): Promise<void> {
     log.debug('🎯 Ensuring transcript/captions are active...');
+    const cues = document.querySelector('[data-purpose="transcript-cue"], [class*="cue-container"], [data-purpose="cue-text"]');
+    if (cues?.textContent?.trim() && !cues.closest('[hidden], [aria-hidden="true"]')) return;
     
     // Check if transcript panel is already visible and has content
     const panelSelectors = [
@@ -1079,10 +1093,11 @@ export class UdemyExtractor {
       log.debug('🎯 Clicking transcript button...');
       
       // Simple click without excessive event simulation
-      transcriptButton.click();
+      if (transcriptButton.getAttribute('aria-expanded') !== 'true' &&
+          transcriptButton.getAttribute('aria-pressed') !== 'true') transcriptButton.click();
       
       // Wait for panel to appear dynamically
-      const panelReady = await this.waitForTranscriptElements(1000);
+      const panelReady = await this.waitForTranscriptElements(5000);
       if (panelReady) {
         log.debug('🎯 Transcript panel opened successfully');
         return;
@@ -1111,7 +1126,9 @@ export class UdemyExtractor {
       await new Promise(resolve => setTimeout(resolve, 100)); // Minimal delay for dropdown animation
       
       // Look for English captions with dynamic timing
-      const englishButton = await this.waitForElement('button[aria-label*="English"], button:has-text("English")', 500);
+      const englishButton = [...document.querySelectorAll('button')].find(button =>
+        /English/i.test(button.getAttribute('aria-label') || button.textContent || '')
+      );
       if (englishButton) {
         (englishButton as HTMLElement).click();
         log.debug('🎯 English captions activated');
@@ -1219,7 +1236,7 @@ export class UdemyExtractor {
     const deadline = Date.now() + timeout;
     do {
       const video = document.querySelector('video');
-      if (document.querySelector('[data-purpose="transcript-panel"], [data-purpose="transcript-cue"]') ||
+      if (document.querySelector('[data-purpose="transcript-cue"], [class*="cue-container"], [data-purpose="cue-text"]') ||
           (video?.textTracks.length ?? 0) > 0) return true;
       await new Promise(resolve => setTimeout(resolve, 50));
     } while (Date.now() < deadline);
@@ -1232,12 +1249,17 @@ export class UdemyExtractor {
   private static async waitForTranscriptButton(timeout = 1500): Promise<HTMLElement | null> {
     const deadline = Date.now() + timeout;
     const selectors = ['button[data-purpose="transcript-toggle"]', '[data-purpose="transcript-toggle"]',
-      'button[aria-label*="transcript" i]', 'button[aria-label*="captions" i]'];
+      'button[aria-label*="transcript" i]', 'button[title*="transcript" i]'];
     do {
       for (const selector of selectors) {
         const button = document.querySelector<HTMLElement>(selector);
         if (button && button.offsetParent !== null && !(button as HTMLButtonElement).disabled) return button;
       }
+      const named = [...document.querySelectorAll<HTMLElement>('button, [role="tab"]')].find(button =>
+        /^transcript$/i.test(button.textContent?.trim() || '') && button.offsetParent !== null &&
+        !(button as HTMLButtonElement).disabled
+      );
+      if (named) return named;
       await new Promise(resolve => setTimeout(resolve, 50));
     } while (Date.now() < deadline);
     return null;

@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Sun,
   Moon,
+  Settings,
   Download,
   Copy,
   AlertCircle,
@@ -23,7 +24,6 @@ import {
   Info,
   ListOrdered,
   X,
-  Settings,
   Sparkles,
   RefreshCw,
   Square,
@@ -31,9 +31,12 @@ import {
 import {
   type BatchState,
   getBatchProgress,
+  batchForCourse,
   getBatchState,
   BATCH_STORAGE_KEY,
 } from '../../lib/batch-service';
+import { VideoDownload } from '../VideoDownload';
+import { SubscriptionSettings } from '../SubscriptionSettings';
 import { StorageService } from '../../lib/storage-service';
 import type { ExportFormat } from '../../lib/extension-service';
 import { formatTimestamp, parseTranscript, type SourceMeta } from '../../lib/transcript';
@@ -262,13 +265,18 @@ export const TranscriptExtractorPopup = () => {
   });
 
   useEffect(() => {
-    void getBatchState().then(setBatchState);
+    let disposed = false;
+    void getBatchState().then(state => {
+      if (!disposed) setBatchState(batchForCourse(state, pageUrl));
+    }).catch(error => {
+      if (!disposed) setErrorMessage(error instanceof Error ? error.message : 'Could not read collection progress.');
+    });
 
     const listener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
       if (areaName === 'local') {
         if (changes[BATCH_STORAGE_KEY]) {
           const nextBatch = (changes[BATCH_STORAGE_KEY].newValue as BatchState | undefined) ?? null;
-          setBatchState(nextBatch);
+          setBatchState(batchForCourse(nextBatch, pageUrl));
         }
         if (pageUrl) {
           void loadCourseCollection(pageUrl, {
@@ -281,10 +289,24 @@ export const TranscriptExtractorPopup = () => {
 
     chrome.storage?.onChanged?.addListener(listener);
     return () => {
+      disposed = true;
       chrome.storage?.onChanged?.removeListener(listener);
     };
   }, [pageUrl, courseStructure]);
 
+  const [sourceTabId, setSourceTabId] = useState<number>();
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  useEffect(() => {
+    if (downloadBusy) return;
+    const update = () => {
+      void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (tab?.id !== undefined && tab.url?.startsWith('https:')) setSourceTabId(tab.id);
+      });
+    };
+    update();
+    chrome.tabs.onActivated.addListener(update);
+    return () => chrome.tabs.onActivated.removeListener(update);
+  }, [downloadBusy]);
   const handleStartEntireCourse = async () => {
     try {
       const service = await getExtensionService();
@@ -293,7 +315,8 @@ export const TranscriptExtractorPopup = () => {
         exportFormat,
       });
       if (!result.success) throw new Error(result.error || 'Could not start collection.');
-      setBatchState(await getBatchState());
+      setErrorMessage('');
+      setBatchState(batchForCourse(await getBatchState(), pageUrl));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to start collection');
     }
@@ -320,7 +343,7 @@ export const TranscriptExtractorPopup = () => {
       const service = await getExtensionService();
       const result = await service.cancelBatchExtraction();
       if (!result.success) throw new Error(result.error);
-      setBatchState(await getBatchState());
+      setBatchState(batchForCourse(await getBatchState(), pageUrl));
     } catch {
       setErrorMessage('Failed to cancel course extraction');
     }
@@ -330,7 +353,7 @@ export const TranscriptExtractorPopup = () => {
     try {
       const result = await (await getExtensionService()).resumeBatchExtraction(retryFailed);
       if (!result.success) throw new Error(result.error || 'Could not resume collection.');
-      setBatchState(await getBatchState());
+      setBatchState(batchForCourse(await getBatchState(), pageUrl));
       setErrorMessage('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not resume collection.');
@@ -981,16 +1004,17 @@ export const TranscriptExtractorPopup = () => {
    */
   const totalLectures: number | null = useMemo(() => {
     const sections = courseStructure?.sections;
-    if (!Array.isArray(sections)) return null;
+    if (!Array.isArray(sections)) return batchState?.items.length || null;
     const total = sections.reduce(
       (sum: number, section: { lectures?: unknown[] }) =>
         sum + (Array.isArray(section.lectures) ? section.lectures.length : 0),
       0,
     );
-    return total > 0 ? total : null;
-  }, [courseStructure]);
+    const knownTotal = Math.max(total, batchState?.items.length ?? 0);
+    return knownTotal > 0 ? knownTotal : null;
+  }, [courseStructure, batchState]);
 
-  const isBusy = isExtracting || isNavigating || Boolean(batchState?.isActive && !batchState.isPaused);
+  const isBusy = downloadBusy || isExtracting || isNavigating || Boolean(batchState?.isActive && !batchState.isPaused);
   const batchProgress = useMemo(() => getBatchProgress(batchState), [batchState]);
   const isDone = extractionStatus === 'success' && Boolean(extractedTranscript);
 
@@ -1105,18 +1129,15 @@ export const TranscriptExtractorPopup = () => {
           <Moon className="h-[17px] w-[17px]" strokeWidth={1.8} />
         )}
       </button>
+
       <button
         type="button"
         onClick={() => setView(view === 'settings' ? 'main' : 'settings')}
         className="te-icon-btn"
-        aria-label={view === 'settings' ? 'Close settings' : 'Settings'}
+        aria-label="Settings"
         aria-pressed={view === 'settings'}
       >
-        {view === 'settings' ? (
-          <X className="h-[17px] w-[17px]" strokeWidth={1.8} />
-        ) : (
-          <Settings className="h-[17px] w-[17px]" strokeWidth={1.8} />
-        )}
+        <Settings className="h-[17px] w-[17px]" strokeWidth={1.8} />
       </button>
     </header>
   );
@@ -1213,15 +1234,7 @@ export const TranscriptExtractorPopup = () => {
             <div style={{ width: `${percent}%` }} />
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => void handleDownloadAllCombined()}
-          disabled={isExporting}
-          className="te-btn h-10 text-[13px]"
-        >
-          <Download className="h-4 w-4" strokeWidth={1.9} />
-          Download all {collection.length} in one file
-        </button>
+
       </div>
     );
   };
@@ -1475,12 +1488,7 @@ export const TranscriptExtractorPopup = () => {
       {renderSkippedSummary()}
 
       <div className="te-glass te-divide flex flex-shrink-0 flex-col">
-        <SwitchRow
-          label="Auto-download"
-          hint="Save the file when extraction finishes"
-          checked={autoDownload}
-          onChange={handleAutoDownloadChange}
-        />
+
         {renderVisualNotes()}
       </div>
 
@@ -1508,12 +1516,7 @@ export const TranscriptExtractorPopup = () => {
       </div>
 
       <div className="te-glass flex-shrink-0">
-        <SwitchRow
-          label="Auto-download"
-          hint="Save the file when extraction finishes"
-          checked={autoDownload}
-          onChange={handleAutoDownloadChange}
-        />
+
       </div>
 
       <p className="te-muted px-1 text-[12px]">
@@ -1583,15 +1586,12 @@ export const TranscriptExtractorPopup = () => {
         </div>
       </div>
 
-      <div className="grid flex-shrink-0 grid-cols-2 gap-2">
+      <div className="flex flex-shrink-0 gap-2">
         <button type="button" onClick={() => handleExport('clipboard')} disabled={isExporting} className="te-btn">
           {isExporting ? <Spinner size={16} /> : <Copy className="h-4 w-4" strokeWidth={1.9} />}
           Copy text
         </button>
-        <button type="button" onClick={() => handleExport('download')} disabled={isExporting} className="te-btn">
-          {isExporting ? <Spinner size={16} /> : <Download className="h-4 w-4" strokeWidth={1.9} />}
-          Download
-        </button>
+
       </div>
 
       <div className="-mt-1 flex items-center gap-1 px-1 text-[12px]">
@@ -1781,7 +1781,7 @@ export const TranscriptExtractorPopup = () => {
           }}
         />
         <SwitchRow
-          label="Auto-download"
+          label="Auto-save transcript exports"
           hint="Save the file when extraction finishes"
           checked={autoDownload}
           onChange={handleAutoDownloadChange}
@@ -1801,16 +1801,22 @@ export const TranscriptExtractorPopup = () => {
         </button>
       )}
 
-      <button type="button" onClick={() => setView('main')} className="te-btn mt-auto w-full">
+      {hasAnything && <details className="te-glass p-4">
+        <summary className="cursor-pointer text-sm">Transcript exports</summary>
+        <div className="mt-3 flex flex-col gap-3">
+          <button type="button" className="te-btn" disabled={isExporting} onClick={() => void handleExport('download')}>Export current transcript</button>
+          {collection.length > 1 && <button type="button" className="te-btn" disabled={isExporting} onClick={() => void handleDownloadAllCombined()}>Export collected transcripts in one file</button>}
+        </div>
+      </details>}
+
+      <button type="button" onClick={() => setView('main')} className="te-btn-primary mt-4 w-full flex-shrink-0">
         Done
       </button>
     </>
   );
 
-  // Chrome caps extension popups at 600px tall, so the design's 640px frame is
-  // trimmed and the body scrolls. Every view is the same size — the popup used
-  // to grow when the search panel opened, which made the window jump.
-  const SHELL = 'w-[380px] h-[600px]';
+  // The side panel fills the browser height and keeps the download engine mounted.
+  const SHELL = 'w-full min-w-[320px] h-screen';
 
   if (showSearch) {
     return (
@@ -1828,32 +1834,76 @@ export const TranscriptExtractorPopup = () => {
     <div className={`te-shell ${SHELL}`}>
       {renderHeader()}
       <main className="te-scroll flex min-h-0 flex-grow flex-col gap-3 overflow-y-auto px-3.5 pb-3.5 pt-2.5">
-        {unsaved && <section className="te-note te-note--warn flex flex-col gap-2" aria-label="Unsaved transcript">
-          <p role="status">{saving ? 'Saving transcript…' : 'Extracted, but not saved to your library.'}</p>
-          <button className="te-btn" disabled={saving} onClick={() => void retrySave()}>Retry save</button>
-          <button className="te-btn" onClick={() => void getExtensionService().then(service =>
-            service.downloadFile(unsaved.transcript, service.generateFilename(unsaved.title, 'txt'), 'text/plain')
-          )}>Download recovery copy</button>
-        </section>}
-        {batchState && (!batchState.isActive || batchState.isPaused) &&
-          (batchState.error || batchState.items.some(item => ['pending', 'extracting', 'failed'].includes(item.status))) && <section className="te-glass flex flex-col gap-2 p-3" aria-label="Collection recovery">
-          <p>{batchState.error || 'Saved collection progress is available.'}</p>
-          <p className="te-muted text-xs">Open a video in the same course or playlist to continue.</p>
-          {batchState.items.some(item => item.status === 'pending' || item.status === 'extracting') &&
-            <button className="te-btn" onClick={() => void handleResume()}>Resume collection</button>}
-          {batchState.items.some(item => item.status === 'failed') &&
-            <button className="te-btn" onClick={() => void handleResume(true)}>Retry failed items</button>}
-        </section>}
+        {unsaved && (
+          <section
+            className="te-note te-note--warn flex flex-col gap-2"
+            aria-label="Unsaved transcript"
+          >
+            <p role="status">
+              {saving ? 'Saving transcript…' : 'Extracted, but not saved to your library.'}
+            </p>
+            <button className="te-btn" disabled={saving} onClick={() => void retrySave()}>
+              Retry save
+            </button>
+            <button
+              className="te-btn"
+              onClick={() =>
+                void getExtensionService().then(service =>
+                  service.downloadFile(
+                    unsaved.transcript,
+                    service.generateFilename(unsaved.title, 'txt'),
+                    'text/plain'
+                  )
+                )
+              }
+            >
+              Download recovery copy
+            </button>
+          </section>
+        )}
+        {batchState &&
+          (!batchState.isActive || batchState.isPaused) &&
+          (batchState.error ||
+            batchState.items.some(item =>
+              ['pending', 'extracting', 'failed'].includes(item.status)
+            )) && (
+            <section className="te-glass flex flex-col gap-2 p-3" aria-label="Collection recovery">
+              <p>{batchState.error || 'Saved collection progress is available.'}</p>
+              <p className="te-muted text-xs">
+                Open a video in the same course or playlist to continue.
+              </p>
+              {batchState.items.some(
+                item => item.status === 'pending' || item.status === 'extracting'
+              ) && (
+                <button className="te-btn" onClick={() => void handleResume()}>
+                  Resume collection
+                </button>
+              )}
+              {batchState.items.some(item => item.status === 'failed') && (
+                <button className="te-btn" onClick={() => void handleResume(true)}>
+                  Retry failed items
+                </button>
+              )}
+            </section>
+          )}
 
-        {view === 'settings'
-          ? renderSettings()
-          : batchState?.isActive && !batchState.isPaused
-            ? renderCourse()
-            : isExtracting
-              ? renderExtracting()
-              : isDone
-                ? renderDone()
-                : renderReady()}
+        {view === 'settings' && <SubscriptionSettings />}
+        {view === 'main' && sourceTabId === undefined && (
+          <p className="te-muted text-sm">Open a video or course page to start downloading.</p>
+        )}
+        {sourceTabId !== undefined && (
+          <div>
+            <VideoDownload
+              key={sourceTabId}
+              sourceTabId={sourceTabId}
+              screen={view}
+              onBusyChange={setDownloadBusy}
+            />
+          </div>
+        )}
+
+        {view === 'settings' && renderSettings()}
+
       </main>
     </div>
   );

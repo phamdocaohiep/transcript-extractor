@@ -30,7 +30,8 @@ export default defineConfig({
         // The library, as a full extension page. Unlike the popup it is not
         // torn down when it loses focus, which is what makes whole-library
         // indexing and cross-course search viable at all.
-        dashboard: path.resolve(__dirname, 'dashboard.html')
+        dashboard: path.resolve(__dirname, 'dashboard.html'),
+        videoDownload: path.resolve(__dirname, 'video-download.html')
       },
       output: {
         entryFileNames: '[name].js',

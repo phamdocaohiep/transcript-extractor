@@ -133,6 +133,7 @@ const REQUIRED = [
   'content-script.js',
   'background.js',
   'dashboard.html',
+  'video-download.html',
   'index.html',
   'models/search/embeddings.bin',
   'models/search/vocab.json',
@@ -193,6 +194,8 @@ if (!(manifest.host_permissions ?? []).some((h) => h === '<all_urls>' || h === '
 const JUSTIFY = {
   activeTab: 'Read the current tab only when the user clicks the extension.',
   storage: 'Remember export preferences and the last transcript.',
+  alarms: 'Check subscription status every 15 minutes.',
+  sidePanel: 'Keep downloads and settings in the main extension panel while browsing.',
   clipboardWrite: 'Copy the transcript when the user asks.',
   scripting: 'Inject the extractor into the page the user is on.',
   downloads: 'Save exported files.',

@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   getBatchProgress,
+  batchForCourse,
   getBatchState,
   setBatchState,
   type BatchState,
@@ -88,5 +89,34 @@ describe('batch-service', () => {
     await setBatchState(null);
     const cleared = await getBatchState();
     expect(cleared).toBeNull();
+  });
+});
+
+
+describe('course-scoped progress', () => {
+  const state = { courseUrl: 'https://uobgroup.udemy.com/course/mindmapforbeginners/learn/lecture/4689848#reviews' } as BatchState;
+  it('keeps progress across lectures and tabs of the same business course', () => {
+    expect(batchForCourse(state, 'https://uobgroup.udemy.com/course/mindmapforbeginners/learn/lecture/999#overview')).toBe(state);
+  });
+  it('hides other courses, other organizations, and unresolved pages', () => {
+    expect(batchForCourse(state, 'https://uobgroup.udemy.com/course/other/learn/lecture/1')).toBeNull();
+    expect(batchForCourse(state, 'https://other.udemy.com/course/mindmapforbeginners')).toBeNull();
+    expect(batchForCourse(state, null)).toBeNull();
+    expect(batchForCourse(null, state.courseUrl)).toBeNull();
+  });
+});
+
+
+describe('background save acknowledgement', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('explains how to recover when an outdated worker does not handle the save', async () => {
+    vi.stubGlobal('location', { protocol: 'https:' });
+    vi.stubGlobal('chrome', { runtime: { id: 'extension', sendMessage: vi.fn(async () => undefined) } });
+    await expect(setBatchState({ runId: 'new' } as BatchState)).rejects.toThrow('Reload Transcript Extractor');
+  });
+  it('preserves actual storage errors returned by the worker', async () => {
+    vi.stubGlobal('location', { protocol: 'https:' });
+    vi.stubGlobal('chrome', { runtime: { id: 'extension', sendMessage: vi.fn(async () => ({ success: false, error: 'Disk full' })) } });
+    await expect(setBatchState({ runId: 'new' } as BatchState)).rejects.toThrow('Disk full');
   });
 });

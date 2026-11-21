@@ -1,4 +1,5 @@
 import { handleBatchRequest } from './lib/batch-controller';
+import { ALARM_NAME, checkSubscription, configureSubscription, scheduleSubscription, setMockDevices } from './lib/subscription';
 /**
  * The extension's one background job: capturing a frame from a keystroke.
  *
@@ -232,6 +233,19 @@ chrome.commands.onCommand.addListener((command) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (['CHECK_SUBSCRIPTION', 'CONFIGURE_SUBSCRIPTION', 'SET_MOCK_DEVICES'].includes(message?.type)) {
+    // Configuration is restricted to our extension pages.
+    if (_sender.id !== chrome.runtime.id || _sender.tab?.url?.startsWith('https:')) {
+      sendResponse({ success: false, error: 'Open subscription settings in the extension.' });
+      return false;
+    }
+    const operation = message.type === 'CONFIGURE_SUBSCRIPTION'
+      ? configureSubscription(message.data)
+      : message.type === 'SET_MOCK_DEVICES' ? setMockDevices(message.data) : checkSubscription();
+    void operation.then(data => sendResponse({ success: true, data }),
+      error => sendResponse({ success: false, error: String(error) }));
+    return true;
+  }
   if (['READ_BATCH_STATE', 'WRITE_BATCH_STATE', 'RESUME_BATCH', 'RETRY_BATCH'].includes(message?.type)) {
     void handleBatchRequest(message.type, message.data ?? null, _sender.tab).then(
       data => sendResponse({ success: true, data }),
@@ -296,3 +310,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === ALARM_NAME) void checkSubscription().catch(error => console.warn('Subscription check failed', error));
+});
+chrome.runtime.onInstalled.addListener(() => {
+  void scheduleSubscription().then(() => checkSubscription()).catch(console.warn);
+});
+chrome.runtime.onStartup.addListener(() => {
+  void scheduleSubscription().then(() => checkSubscription()).catch(console.warn);
+});
+void scheduleSubscription().catch(console.warn);
+
+void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.warn);

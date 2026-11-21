@@ -39,6 +39,12 @@ export interface BatchState {
 
 export const BATCH_STORAGE_KEY = 'course_batch_state';
 
+/** Only display progress belonging to the course currently open in the popup. */
+export function batchForCourse(state: BatchState | null, url: string | null | undefined): BatchState | null {
+  return state && url && groupKey(state.courseUrl) === groupKey(url) ? state : null;
+}
+
+
 /**
  * Load the active batch state from storage.
  */
@@ -63,7 +69,7 @@ export async function getBatchState(): Promise<BatchState | null> {
 export async function setBatchState(state: BatchState | null): Promise<void> {
   if (isPageContext()) {
     const response = await chrome.runtime.sendMessage({ type: 'WRITE_BATCH_STATE', data: state });
-    if (!response?.success) throw new Error(response?.error || 'Could not save collection progress.');
+    if (!response?.success) throw new Error(response?.error || 'The extension background did not confirm the save. Reload Transcript Extractor in chrome://extensions, then refresh this course page and try again.');
     if (state && response.data) Object.assign(state, response.data);
     return;
   }

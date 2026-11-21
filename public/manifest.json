@@ -6,9 +6,11 @@
   "permissions": [
     "activeTab",
     "storage",
+    "alarms",
     "clipboardWrite",
     "scripting",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://*.udemy.com/*",
@@ -22,7 +24,6 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "index.html",
     "default_title": "Transcript Extractor",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -69,5 +70,12 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
-  }
+  },
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "minimum_chrome_version": "116"
 }
