@@ -6,6 +6,9 @@ import {
   saveDirectory,
   loadDirectory,
   PREFERENCES_KEY,
+  recordFile,
+  loadFiles,
+  clearFiles,
 } from './preferences';
 let stored: Record<string, unknown>;
 beforeEach(() => {
@@ -32,6 +35,21 @@ it('restores the selected folder handle from a reopened database', async () => {
   const handle = { kind: 'directory', name: 'Saved downloads' } as FileSystemDirectoryHandle;
   await saveDirectory(handle);
   expect(await loadDirectory()).toEqual(handle);
+});
+it('records related filenames and directories across reopened databases', async () => {
+  const directory = { kind: 'directory', name: 'Files' } as FileSystemDirectoryHandle;
+  await Promise.all([
+    recordFile('test-files', { directory, name: 'one.mp4' }),
+    recordFile('test-files', { directory, name: 'one.md' }),
+  ]);
+  expect((await loadFiles('test-files')).map(file => file.name).sort()).toEqual([
+    'one.md',
+    'one.mp4',
+  ]);
+  await clearFiles('test-files');
+  expect(await loadFiles('test-files')).toEqual([]);
+  await savePreferences({ video: true, transcript: true, automatic: false, deleteFiles: true });
+  expect((await loadPreferences()).deleteFiles).toBe(true);
 });
 it('keeps saved file locations separate from later destination changes', async () => {
   const first = { kind: 'directory', name: 'First' } as FileSystemDirectoryHandle;

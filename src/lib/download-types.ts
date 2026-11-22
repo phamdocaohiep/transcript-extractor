@@ -1,4 +1,5 @@
 export interface Preferences {
+  deleteFiles?: boolean;
   video: boolean;
   transcript: boolean;
   automatic: boolean;

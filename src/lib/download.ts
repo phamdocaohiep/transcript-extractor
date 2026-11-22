@@ -20,7 +20,7 @@ import { groupKey } from './identity';
 import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
 import { classifyError, type Trace } from './diagnostics';
-import { saveDirectory } from './preferences';
+import { saveDirectory, recordFile } from './preferences';
 import { parseTranscript } from './transcript';
 
 export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
@@ -320,6 +320,7 @@ export async function saveDownload(
       );
       signal.throwIfAborted();
       await writer.close();
+      await recordFile(completionKey(context.url), { directory, name: `${base}.md` });
       trace?.('file_saved', { format: 'transcript', extension: 'md' });
     } catch (error) {
       await writer.abort().catch(() => undefined);
@@ -386,6 +387,7 @@ export async function saveDownload(
       }
       signal.throwIfAborted();
       await writer.close();
+      await recordFile(completionKey(context.url), { directory, name: filename });
       trace?.('file_saved', {
         format: 'video',
         extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',

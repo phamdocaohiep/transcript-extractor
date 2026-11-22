@@ -115,8 +115,13 @@ want to skip, then click **Download**. Completed items are skipped when resuming
 Video and transcript progress are counted separately. A saved video remains counted when its
 transcript is unavailable, including after reopening the panel. Retrying that partial item attempts
 the missing transcript without downloading its video again.
-The small trash button beside a saved item's status removes that row from the current list; it does
-not delete saved files. The close button at the top right of a queue stops and dismisses only that queue,
+The small trash button deletes that video's recorded files, including transcripts and other downloaded
+qualities, then resets it to Ready with quality and Download controls. Settings → **Delete video and all
+downloaded resources without asking** skips confirmation when enabled; otherwise a confirmation is required.
+Cancel keeps files and state unchanged. Only exact recorded filenames are removed, never a whole folder.
+File records begin in version 4.7.7; older downloads without records must be removed manually rather than
+guessing filenames. If access or deletion fails, the item is not reset and an error is shown.
+The close button at the top right of a queue stops and dismisses only that queue,
 leaving its source tab and saved files intact. It stays dismissed for that collection until the panel is reopened
 or the tab moves to another collection.
 

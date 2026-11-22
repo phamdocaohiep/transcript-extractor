@@ -3,6 +3,7 @@ import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
 import { Trash2, X, Download, FolderOpen, Pencil } from 'lucide-react';
 import { Preview } from './Preview';
+import { deleteSaved } from '../lib/saved-files';
 import {
   HostAccessNeeded,
   SelectionUnavailable,
@@ -195,6 +196,30 @@ export function VideoDownload({
   const working = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const automaticAttempt = useRef('');
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const url = (event as CustomEvent<string>).detail;
+      if (typeof url !== 'string') return;
+      const id = lectureId(url, '');
+      if (!itemsRef.current.some(item => item.url && lectureId(item.url, '') === id)) return;
+      const value = settings.current;
+      automaticAttempt.current = `${id}:${value.video}:${value.transcript}:${selectionKey(value)}`;
+      setItems(previous =>
+        previous.map(item =>
+          item.url && lectureId(item.url, '') === id
+            ? {
+                ...item,
+                status: 'pending',
+                saved: { video: false, transcript: false },
+                error: undefined,
+              }
+            : item
+        )
+      );
+    };
+    window.addEventListener('download-files-deleted', changed);
+    return () => window.removeEventListener('download-files-deleted', changed);
+  }, []);
   const resumeQueue = useRef(false);
   const requesting = useRef(false);
   const continueQueue = useRef<() => Promise<void>>(async () => undefined);
@@ -1237,6 +1262,45 @@ export function VideoDownload({
       </button>
     );
   }
+  async function removeSaved(item: DownloadItem) {
+    if (working.current || busy || settingsLocked || !item.url || !context) return;
+    if (
+      !preferences.deleteFiles &&
+      !window.confirm(
+        'Delete this video and all its downloaded files, including transcripts and other saved qualities? This cannot be undone.'
+      )
+    )
+      return;
+    working.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await deleteSaved(item.url);
+      window.dispatchEvent(new CustomEvent('download-files-deleted', { detail: item.url }));
+      await persistItems(
+        items.map(value =>
+          value.id === item.id
+            ? {
+                ...value,
+                selected: true,
+                status: 'pending',
+                error: undefined,
+                saved: { video: false, transcript: false },
+              }
+            : value
+        ),
+        context.url
+      );
+      setNotice('');
+      setProgress({ completed: 0, total: 0, bytes: 0 });
+      automaticAttempt.current = `${lectureId(item.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+    } catch (err) {
+      report(err);
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
+  }
   function renderStatus(item: DownloadItem, compact = false, detailsOnly = false) {
     const saved = getSaved(item, preferences);
     const showLabel = !detailsOnly || (compact && (saved.video || saved.transcript));
@@ -1295,15 +1359,9 @@ export function VideoDownload({
               className="te-small-button"
               type="button"
               aria-label={`Remove downloaded item: ${item.title}`}
-              title="Remove from list; keep saved files"
-              disabled={busy}
-              onClick={() => {
-                removed.current.add(`${groupKey(context!.url)}:${item.id}`);
-                void persistItems(
-                  items.filter(value => value.id !== item.id),
-                  context!.url
-                ).catch(report);
-              }}
+              title="Delete video and downloaded resources"
+              disabled={busy || settingsLocked}
+              onClick={() => void removeSaved(item)}
             >
               <Trash2 size={14} />
             </button>
@@ -1434,6 +1492,17 @@ export function VideoDownload({
         <p className="te-muted text-sm">
           Settings are saved in this Chrome profile across extension updates.
         </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={preferences.deleteFiles === true}
+            disabled={busy || settingsLocked || !loaded}
+            onChange={event =>
+              void changePreferences({ ...preferences, deleteFiles: event.target.checked })
+            }
+          />{' '}
+          Delete video and all downloaded resources without asking
+        </label>
         <button
           className="te-btn te-folder-setting"
           disabled={busy || settingsLocked}

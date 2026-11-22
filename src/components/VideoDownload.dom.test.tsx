@@ -11,6 +11,9 @@ import {
   saveDirectory,
   loadDirectory,
   hasDirectoryAccess,
+  recordFile,
+  loadFiles,
+  clearFiles,
 } from '../lib/preferences';
 vi.mock('../lib/preferences', () => ({
   loadPreferences: vi.fn(async () => ({ video: true, transcript: true, automatic: false })),
@@ -18,6 +21,9 @@ vi.mock('../lib/preferences', () => ({
   loadDirectory: vi.fn(async () => null),
   saveDirectory: vi.fn(async () => undefined),
   hasDirectoryAccess: vi.fn(async () => true),
+  recordFile: vi.fn(async () => undefined),
+  loadFiles: vi.fn(async () => []),
+  clearFiles: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/adaptive-stream', async importOriginal => {
   const actual = await importOriginal<typeof import('../lib/adaptive-stream')>();
@@ -83,6 +89,18 @@ beforeEach(() => {
     },
   });
   vi.mocked(loadDirectory).mockResolvedValue(null);
+  const files: Record<string, import('../lib/preferences').SavedFile[]> = {};
+  vi.mocked(recordFile).mockImplementation(async (key, file) => {
+    (files[key] ||= []).push(file);
+  });
+  vi.mocked(loadFiles).mockImplementation(async key => files[key] || []);
+  vi.mocked(clearFiles).mockImplementation(async key => {
+    delete files[key];
+  });
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true)
+  );
   vi.mocked(hasDirectoryAccess).mockResolvedValue(true);
   stored = {};
   textPages = new Set();
@@ -102,8 +120,12 @@ beforeEach(() => {
   vi.stubGlobal('chrome', {
     storage: {
       local: {
-        get: vi.fn(async (keys: string | string[]) =>
-          Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, stored[key]]))
+        get: vi.fn(async (keys: string | string[] | null) =>
+          keys === null
+            ? { ...stored }
+            : Object.fromEntries(
+                (Array.isArray(keys) ? keys : [keys]).map(key => [key, stored[key]])
+              )
         ),
         set: vi.fn(async (value: Record<string, unknown>) => {
           Object.assign(stored, value);
@@ -454,24 +476,71 @@ it('uses the newest global destination when it changes after editing a filename'
   expect(newest.getFileHandle).toHaveBeenCalledWith('Latest choice.mp4', { create: true });
   expect(Object.keys(writes).sort()).toEqual(['Latest choice.md', 'Latest choice.mp4']);
 });
-it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
+it.each([false, true])(
+  'deletes all recorded files and restores Ready; skip confirmation = %s',
+  async deleteFiles => {
+    vi.useFakeTimers();
+    vi.mocked(loadPreferences).mockResolvedValue({
+      video: true,
+      transcript: true,
+      automatic: true,
+      deleteFiles,
+    });
+    await render();
+    await click('Choose destination folder');
+    await click('Download');
+    expect(container.querySelector('.te-download-toolbar')).toBeNull();
+    expect(container.querySelector('[aria-label="Video quality"]')).toBeNull();
+    expect(container.textContent).toContain('1 video & transcript downloaded');
+    const remove = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Remove downloaded item: First lecture"]'
+    )!;
+    expect(remove).not.toBeNull();
+    await act(async () => remove.click());
+    expect(container.querySelectorAll('li input')).toHaveLength(0);
+    expect(window.confirm).toHaveBeenCalledTimes(deleteFiles ? 0 : 1);
+    expect(folder.removeEntry).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+    expect(container.querySelector('.te-download-toolbar')).not.toBeNull();
+    expect(stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1']).toEqual({
+      video: false,
+      transcript: false,
+    });
+    const count = folder.getFileHandle.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(folder.getFileHandle).toHaveBeenCalledTimes(count);
+    expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+  }
+);
+it('keeps the completed item and its files when deletion is cancelled', async () => {
   await render();
   await click('Choose destination folder');
   await click('Download');
-  expect(container.querySelector('.te-download-toolbar')).toBeNull();
-  expect(container.querySelector('[aria-label="Video quality"]')).toBeNull();
-  expect(container.textContent).toContain('1 video & transcript downloaded');
-  const remove = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Remove downloaded item: First lecture"]'
-  )!;
-  expect(remove).not.toBeNull();
-  await act(async () => remove.click());
-  expect(container.querySelectorAll('li input')).toHaveLength(0);
+  vi.mocked(window.confirm).mockReturnValue(false);
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Remove downloaded item: First lecture"]')!
+      .click()
+  );
   expect(folder.removeEntry).not.toHaveBeenCalled();
-  expect(stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1']).toEqual({
-    video: true,
-    transcript: true,
-  });
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(container.querySelector('.te-download-toolbar')).toBeNull();
+});
+it('does not claim successful deletion or reset the item when folder access fails', async () => {
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  vi.mocked(hasDirectoryAccess).mockResolvedValue(false);
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Remove downloaded item: First lecture"]')!
+      .click()
+  );
+  expect(folder.removeEntry).not.toHaveBeenCalled();
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(container.textContent).toContain('Folder access was not granted');
 });
 it('does not reload a stale source by default', async () => {
   (chrome.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -1808,6 +1877,18 @@ it('keeps a background permission pause and resumes it when another queue grants
 it('shares a folder selected in one queue with the other registered queues', async () => {
   configureParallel();
   vi.mocked(loadDirectory).mockResolvedValue(null);
+  const files: Record<string, import('../lib/preferences').SavedFile[]> = {};
+  vi.mocked(recordFile).mockImplementation(async (key, file) => {
+    (files[key] ||= []).push(file);
+  });
+  vi.mocked(loadFiles).mockImplementation(async key => files[key] || []);
+  vi.mocked(clearFiles).mockImplementation(async key => {
+    delete files[key];
+  });
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true)
+  );
   await act(async () =>
     root.render(
       <>
