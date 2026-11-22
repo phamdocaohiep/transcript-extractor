@@ -108,7 +108,9 @@ available source timestamps, disabled removes them. Missing source timing is not
 New video and transcript files are written directly into that folder, without creating a source subfolder.
 The small folder icon beside a completed result opens Chrome's file browser at its saved destination;
 it does not change Settings or launch Finder. Saved locations are retained for new downloads even if
-you later choose another destination. Older downloads without a recorded location do not show this icon.
+you later choose another destination. Older downloads without a recorded location show the same folder
+icon as **Browse configured folder**, with a tooltip explaining that the original location is unknown.
+If no folder is configured, the icon stays visible but disabled with a Settings hint.
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.
@@ -119,8 +121,9 @@ The small trash button deletes that video's recorded files, including transcript
 qualities, then resets it to Ready with quality and Download controls. Settings → **Delete video and all
 downloaded resources without asking** skips confirmation when enabled; otherwise a confirmation is required.
 Cancel keeps files and state unchanged. Only exact recorded filenames are removed, never a whole folder.
-File records begin in version 4.7.7; older downloads without records must be removed manually rather than
-guessing filenames. If access or deletion fails, the item is not reset and an error is shown.
+File records begin in version 4.7.7. Older downloads without records reset to Ready with a note that
+their files remain and must be removed manually; filenames are never guessed. If access or actual
+file deletion fails, the item is not reset and an error is shown.
 The close button at the top right of a queue stops and dismisses only that queue,
 leaving its source tab and saved files intact. It stays dismissed for that collection until the panel is reopened
 or the tab moves to another collection.

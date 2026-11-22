@@ -98,11 +98,20 @@ export function VideoDownload({
     let disposed = false;
     void Promise.all(
       items
-        .filter(item => item.url && (item.saved?.video || item.saved?.transcript))
-        .map(
-          async item =>
-            [item.id, await loadDirectory(`location:${completionKey(item.url!)}`)] as const
+        .filter(
+          item =>
+            item.saved?.video ||
+            item.saved?.transcript ||
+            item.status === 'completed' ||
+            item.status === 'partial'
         )
+        .map(async item => {
+          const url = item.url || (items.length === 1 ? context?.url : undefined);
+          return [
+            item.id,
+            url ? await loadDirectory(`location:${completionKey(url)}`) : null,
+          ] as const;
+        })
     )
       .then(values => {
         if (!disposed)
@@ -118,7 +127,7 @@ export function VideoDownload({
     return () => {
       disposed = true;
     };
-  }, [items]);
+  }, [items, context?.url]);
   const [listSize, setListSize] = useState<{
     loaded: number;
     expected: number;
@@ -1275,7 +1284,7 @@ export function VideoDownload({
     setBusy(true);
     setError('');
     try {
-      await deleteSaved(item.url);
+      const result = await deleteSaved(item.url);
       window.dispatchEvent(new CustomEvent('download-files-deleted', { detail: item.url }));
       await persistItems(
         items.map(value =>
@@ -1291,7 +1300,11 @@ export function VideoDownload({
         ),
         context.url
       );
-      setNotice('');
+      setNotice(
+        result.filesRecorded
+          ? ''
+          : 'Ready to download again. Older files were not deleted because their filenames were not recorded; remove those files manually.'
+      );
       setProgress({ completed: 0, total: 0, bytes: 0 });
       automaticAttempt.current = `${lectureId(item.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
     } catch (err) {
@@ -1329,32 +1342,39 @@ export function VideoDownload({
         )}
         {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
           <>
-            {locations[item.id] && (
-              <button
-                type="button"
-                className="te-text-button te-location-button"
-                aria-label="Browse saved location"
-                title="Browse saved location"
-                onClick={() => {
-                  const picker = (
-                    window as unknown as {
-                      showOpenFilePicker(options: {
-                        startIn: FileSystemDirectoryHandle;
-                      }): Promise<unknown>;
-                    }
-                  ).showOpenFilePicker;
-                  if (!picker) {
-                    setError('File browsing is unavailable in this browser.');
-                    return;
+            <button
+              type="button"
+              className="te-text-button te-location-button"
+              aria-label={locations[item.id] ? 'Browse saved location' : 'Browse configured folder'}
+              title={
+                locations[item.id]
+                  ? 'Browse saved location'
+                  : directory
+                    ? 'Browse configured folder; the original location was not recorded'
+                    : 'Choose a folder in Settings to browse downloaded files'
+              }
+              disabled={!locations[item.id] && !directory}
+              onClick={() => {
+                const picker = (
+                  window as unknown as {
+                    showOpenFilePicker(options: {
+                      startIn: FileSystemDirectoryHandle;
+                    }): Promise<unknown>;
                   }
-                  void picker.call(window, { startIn: locations[item.id] }).catch(err => {
+                ).showOpenFilePicker;
+                if (!picker) {
+                  setError('File browsing is unavailable in this browser.');
+                  return;
+                }
+                void picker
+                  .call(window, { startIn: locations[item.id] || directory! })
+                  .catch(err => {
                     if (!(err instanceof DOMException && err.name === 'AbortError')) report(err);
                   });
-                }}
-              >
-                <FolderOpen size={14} />
-              </button>
-            )}
+              }}
+            >
+              <FolderOpen size={14} />
+            </button>
             <button
               className="te-small-button"
               type="button"

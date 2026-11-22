@@ -4,13 +4,9 @@ import { lectureId } from './collection';
 import type { DownloadItem } from './download-types';
 
 /** Delete only exact files recorded by the extension, never a whole folder. */
-export async function deleteSaved(url: string): Promise<void> {
+export async function deleteSaved(url: string): Promise<{ filesRecorded: boolean }> {
   const key = completionKey(url);
   const files = await loadFiles(key);
-  if (!files.length)
-    throw new Error(
-      'This download has no recorded file list. Older files must be removed manually.'
-    );
   for (const file of files) {
     if (!file.name || /[/\\]|^\.{1,2}$/.test(file.name))
       throw new Error('The saved file record is invalid. No folder will be deleted.');
@@ -44,4 +40,5 @@ export async function deleteSaved(url: string): Promise<void> {
   }
   await chrome.storage.local.set(updates);
   await clearFiles(key);
+  return { filesRecorded: files.length > 0 };
 }

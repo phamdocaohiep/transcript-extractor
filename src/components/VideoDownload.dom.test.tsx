@@ -449,6 +449,39 @@ it('writes directly into the configured folder and browses its saved location wi
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
   vi.mocked(saveDirectory).mockImplementation(async () => undefined);
 });
+it('shows a folder button for older completed downloads without recorded locations', async () => {
+  const destination = {
+    name: 'Configured folder',
+    ...folder,
+  } as unknown as FileSystemDirectoryHandle;
+  vi.mocked(loadDirectory).mockImplementation(async (key = 'directory') =>
+    key === 'directory' ? destination : null
+  );
+  stored[`download_completed:${currentUrl}`] = { video: true, transcript: true };
+  const picker = vi.fn(async () => []);
+  vi.stubGlobal('showOpenFilePicker', picker);
+  await render();
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Browse configured folder"]'
+  )!;
+  expect(button).not.toBeNull();
+  expect(button.disabled).toBe(false);
+  expect(button.title).toContain('original location was not recorded');
+  await act(async () => button.click());
+  expect(picker).toHaveBeenCalledWith({ startIn: destination });
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(Object.keys(writes)).toHaveLength(0);
+});
+it('keeps the location action visible with a Settings hint when no folder is available', async () => {
+  stored[`download_completed:${currentUrl}`] = { video: true, transcript: true };
+  await render();
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Browse configured folder"]'
+  )!;
+  expect(button).not.toBeNull();
+  expect(button.disabled).toBe(true);
+  expect(button.title).toContain('Choose a folder in Settings');
+});
 it('uses the newest global destination when it changes after editing a filename', async () => {
   await render();
   await click('Choose destination folder');
@@ -512,6 +545,43 @@ it.each([false, true])(
     });
     expect(folder.getFileHandle).toHaveBeenCalledTimes(count);
     expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+  }
+);
+it.each([false, true])(
+  'resets an older download with no file records and explains that its files remain; skip confirmation = %s',
+  async deleteFiles => {
+    vi.useFakeTimers();
+    vi.mocked(loadPreferences).mockResolvedValue({
+      video: true,
+      transcript: true,
+      automatic: true,
+      deleteFiles,
+    });
+    await render();
+    await click('Choose destination folder');
+    await click('Download');
+    vi.mocked(loadFiles).mockResolvedValue([]);
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Remove downloaded item: First lecture"]')!
+        .click()
+    );
+    expect(window.confirm).toHaveBeenCalledTimes(deleteFiles ? 0 : 1);
+    expect(folder.removeEntry).not.toHaveBeenCalled();
+    expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+    expect(container.querySelector('.te-download-toolbar')).not.toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('.te-download-button')?.disabled).toBe(false);
+    expect(container.textContent).not.toContain('Failed ·');
+    expect(container.textContent).not.toContain('1 video & transcript downloaded');
+    expect(container.textContent).toContain('Older files were not deleted');
+    expect(container.querySelector('.te-retry-button')).toBeNull();
+    const count = folder.getFileHandle.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(folder.getFileHandle).toHaveBeenCalledTimes(count);
+    await click('Download');
+    expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
   }
 );
 it('keeps the completed item and its files when deletion is cancelled', async () => {

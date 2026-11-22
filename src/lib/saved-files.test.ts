@@ -63,9 +63,11 @@ it('handles an already removed file but keeps records on other filesystem errors
   await expect(deleteSaved(url)).rejects.toThrow('Denied');
   expect(clearFiles).not.toHaveBeenCalled();
 });
-it('does not guess filenames for older downloads or traverse a folder path', async () => {
+it('resets older downloads without guessing filenames and rejects folder traversal', async () => {
   vi.mocked(loadFiles).mockResolvedValue([]);
-  await expect(deleteSaved(url)).rejects.toThrow('Older files');
+  await expect(deleteSaved(url)).resolves.toEqual({ filesRecorded: false });
+  expect(data[key]).toEqual({ video: false, transcript: false });
+  expect(data[`${key}:quality:mp4:720`]).toEqual({ video: false, transcript: false });
   const removeEntry = vi.fn();
   vi.mocked(loadFiles).mockResolvedValue([
     { directory: { removeEntry } as unknown as FileSystemDirectoryHandle, name: '../other.mp4' },
