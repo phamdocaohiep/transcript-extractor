@@ -1073,6 +1073,10 @@ export const TranscriptExtractorPopup = () => {
   // chosen once and then left alone, and the design keeps the popup to the
   // one decision that matters per lecture.
   const [view, setView] = useState<'main' | 'settings'>('main');
+  const scrollArea = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (scrollArea.current) scrollArea.current.scrollTop = 0;
+  }, [view]);
 
   /** The first few cues, for the preview on the "ready" screen. */
   const previewCues = useMemo(
@@ -1816,7 +1820,7 @@ export const TranscriptExtractorPopup = () => {
       )}
     <div className={`te-shell ${SHELL}`} style={showSearch ? { display: 'none' } : undefined}>
       {renderHeader()}
-      <main className="te-scroll flex min-h-0 flex-grow flex-col gap-3 overflow-y-auto px-3.5 pb-3.5 pt-2.5">
+      <main ref={scrollArea} className="te-scroll flex min-h-0 flex-grow flex-col gap-3 overflow-y-auto px-3.5 pb-3.5 pt-2.5">
         {unsaved && (
           <section
             className="te-note te-note--warn flex flex-col gap-2"

@@ -21,6 +21,7 @@ import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
 import { classifyError, type Trace } from './diagnostics';
 import { saveDirectory } from './preferences';
+import { parseTranscript } from './transcript';
 
 export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
   `download_completed:${lectureId(url, '')}${choice && (choice.format || choice.maxHeight) ? `:quality:${selectionKey(choice)}` : ''}`;
@@ -274,7 +275,8 @@ export async function saveDownload(
   signal: AbortSignal,
   progress: (completed: number, total: number, bytes: number) => void,
   notice: (value: string) => void,
-  trace?: Trace
+  trace?: Trace,
+  filename?: string
 ): Promise<void> {
   await assertEntitlement();
   signal.throwIfAborted();
@@ -283,13 +285,38 @@ export async function saveDownload(
     throw new Error('No supported video is ready.');
   if (preferences.transcript && !transcript.trim()) throw new Error('No transcript is ready.');
   const folder = directory;
-  const base = `${safeVideoName(context.title)}-${crypto.randomUUID().slice(0, 8)}`;
+  let base = safeVideoName(filename || context.title);
+  if (filename?.trim()) {
+    const extensions = [
+      ...(preferences.video
+        ? [plan?.kind === 'tracks' || plan?.kind === 'adaptive' ? plan.extension : 'mp4']
+        : []),
+      ...(preferences.transcript ? ['md'] : []),
+    ];
+    for (const extension of extensions) {
+      try {
+        await folder.getFileHandle(`${base}.${extension}`);
+        base += `-${crypto.randomUUID().slice(0, 8)}`;
+        break;
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === 'NotFoundError')) throw err;
+      }
+    }
+  } else base += `-${crypto.randomUUID().slice(0, 8)}`;
   if (preferences.transcript) {
+    const state = (await chrome.storage.local.get('transcriptExtractorState'))
+      .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;
+    const text =
+      state?.includeTimestamps === false
+        ? parseTranscript(transcript.replace(/\n(?=\[\d{1,2}:\d{2}(?::\d{2})?\])/g, '\n\n'))
+            .map(cue => cue.text)
+            .join('\n')
+        : transcript;
     const file = await folder.getFileHandle(`${base}.md`, { create: true });
     const writer = await file.createWritable();
     try {
       await writer.write(
-        `# ${context.title.replace(/[\r\n]+/g, ' ')}\n\nSource: ${context.url}\n\n${transcript}\n`
+        `# ${context.title.replace(/[\r\n]+/g, ' ')}\n\nSource: ${context.url}\n\n${text}\n`
       );
       signal.throwIfAborted();
       await writer.close();

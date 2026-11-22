@@ -10,6 +10,7 @@ export const selectionKey = (value: Pick<Preferences, 'format' | 'maxHeight'>) =
   `${value.format || 'auto'}:${value.maxHeight || 0}`;
 
 export interface DownloadItem {
+  filename?: string;
   id: string;
   title: string;
   url?: string;

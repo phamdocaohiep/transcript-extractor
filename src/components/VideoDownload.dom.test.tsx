@@ -151,17 +151,20 @@ beforeEach(() => {
   );
   writes = {};
   folder = {
-    getFileHandle: vi.fn(async (name: string) => ({
-      createWritable: async () => {
-        const writer = {
-          write: vi.fn(async () => undefined),
-          close: vi.fn(async () => undefined),
-          abort: vi.fn(async () => undefined),
-        };
-        writes[name] = writer;
-        return writer;
-      },
-    })),
+    getFileHandle: vi.fn(async (name: string, options?: { create?: boolean }) => {
+      if (!options?.create) throw new DOMException('Missing', 'NotFoundError');
+      return {
+        createWritable: async () => {
+          const writer = {
+            write: vi.fn(async () => undefined),
+            close: vi.fn(async () => undefined),
+            abort: vi.fn(async () => undefined),
+          };
+          writes[name] = writer;
+          return writer;
+        },
+      };
+    }),
     removeEntry: vi.fn(async () => undefined),
   };
   vi.stubGlobal(
@@ -379,6 +382,7 @@ it('keeps progress, combining details and cancellation inside the source card', 
   expect(card.querySelector('.te-preview-column .te-preview-status')?.textContent).toBe(
     'Downloading'
   );
+  expect(card.querySelector('[aria-label^="Edit filename:"]')).toBeNull();
   expect(card.querySelector('.te-status-line [aria-label="Cancel download"]')).not.toBeNull();
   expect(card.querySelector('.te-download-progress button')).toBeNull();
   expect(card.querySelector('progress')?.value).toBe(2);
@@ -416,11 +420,39 @@ it('writes directly into the configured folder and browses its saved location wi
     '[aria-label="Browse saved location"]'
   )!;
   expect(button).not.toBeNull();
+  expect(container.querySelector('[aria-label^="Edit filename:"]')).toBeNull();
   await act(async () => button.click());
   expect(picker).toHaveBeenCalledWith({ startIn: destination });
   expect(locations.get('directory')).toBe(destination);
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
   vi.mocked(saveDirectory).mockImplementation(async () => undefined);
+});
+it('uses the newest global destination when it changes after editing a filename', async () => {
+  await render();
+  await click('Choose destination folder');
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Edit filename: First lecture"]')!
+      .click()
+  );
+  const input = container.querySelector<HTMLInputElement>('.te-filename-input')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+      input,
+      'Latest choice'
+    );
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const newest = { name: 'New folder', ...folder, getFileHandle: vi.fn(folder.getFileHandle) };
+  vi.mocked(
+    (window as unknown as { showDirectoryPicker: ReturnType<typeof vi.fn> }).showDirectoryPicker
+  ).mockResolvedValueOnce(newest);
+  await render('settings');
+  await act(async () => container.querySelector<HTMLButtonElement>('.te-folder-setting')!.click());
+  await render('main');
+  await click('Download');
+  expect(newest.getFileHandle).toHaveBeenCalledWith('Latest choice.mp4', { create: true });
+  expect(Object.keys(writes).sort()).toEqual(['Latest choice.md', 'Latest choice.mp4']);
 });
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
@@ -944,6 +976,64 @@ it('continues the whole-course queue after a text-only page', async () => {
   });
   expect(Object.keys(writes)).toHaveLength(1);
   expect(container.textContent).toContain('1 saved, 1 without video, 0 failed');
+});
+it.each([true, false])(
+  'applies the export timestamp setting to downloaded Markdown: %s',
+  async includeTimestamps => {
+    stored.transcriptExtractorState = { includeTimestamps };
+    const { loadCourseCollection } = await import('../lib/collection-store');
+    vi.mocked(loadCourseCollection).mockResolvedValueOnce([
+      { id: currentUrl, transcript: '[00:12] Timed sentence.\n[01:03] Second sentence.' },
+    ] as Awaited<ReturnType<typeof loadCourseCollection>>);
+    await render();
+    await click('Choose destination folder');
+    await click('Download');
+    const writer = writes[Object.keys(writes).find(name => name.endsWith('.md'))!];
+    const content = String(writer.write.mock.calls[0][0]);
+    expect(content).toContain('Timed sentence.');
+    expect(content.includes('[00:12]')).toBe(includeTimestamps);
+    expect(content.includes('[01:03]')).toBe(includeTimestamps);
+  }
+);
+it('uses an editable filename and preserves it across Settings without changing the original title', async () => {
+  await render();
+  const edit = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Edit filename: First lecture"]'
+  )!;
+  await act(async () => edit.click());
+  const input = container.querySelector<HTMLInputElement>('.te-filename-input')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+      input,
+      'My video'
+    );
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await click('Choose destination folder');
+  expect(container.textContent).toContain('First lecture');
+  expect(container.querySelector<HTMLInputElement>('.te-filename-input')?.value).toBe('My video');
+  await click('Download');
+  expect(Object.keys(writes).sort()).toEqual(['My video.md', 'My video.mp4']);
+});
+it('updates automatic completion after navigating to a new source and returning from Settings', async () => {
+  vi.useFakeTimers();
+  vi.mocked(loadPreferences).mockResolvedValue({ video: true, transcript: true, automatic: true });
+  await render();
+  await click('Choose destination folder');
+  currentUrl = 'https://www.udemy.com/course/second/learn/lecture/2';
+  listing = [{ id: '2', title: 'Second video', url: currentUrl }];
+  await render('settings');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  await render('main');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
+  expect(container.querySelector('progress')).toBeNull();
+  expect(container.textContent).not.toContain('MB downloaded');
+  await render('settings');
+  await render('main');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
 });
 it('keeps a download alive while switching between Main and Settings', async () => {
   let release!: (response: Response) => void;

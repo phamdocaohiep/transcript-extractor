@@ -100,6 +100,11 @@ All of this is derived from the transcript by selection and statistics, so nothi
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
 The destination folder is remembered in the Chrome profile. Chrome may ask to renew folder access.
+Use the small **Save as** action below a video's title to edit its filename before downloading.
+Video and Markdown use the same name; unsafe path characters are replaced and existing files are not
+overwritten (a short suffix is added on collision). The original video title remains in the Markdown heading.
+The **Timestamps** export switch also applies to Markdown saved alongside videos: enabled preserves
+available source timestamps, disabled removes them. Missing source timing is not fabricated.
 New video and transcript files are written directly into that folder, without creating a source subfolder.
 The small folder icon beside a completed result opens Chrome's file browser at its saved destination;
 it does not change Settings or launch Finder. Saved locations are retained for new downloads even if

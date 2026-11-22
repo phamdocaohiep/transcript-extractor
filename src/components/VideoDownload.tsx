@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
-import { Trash2, X, Download, FolderOpen } from 'lucide-react';
+import { Trash2, X, Download, FolderOpen, Pencil } from 'lucide-react';
 import { Preview } from './Preview';
 import {
   HostAccessNeeded,
@@ -89,6 +89,9 @@ export function VideoDownload({
   });
   const [loaded, setLoaded] = useState(false);
   const [items, setItems] = useState<DownloadItem[]>([]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const [editing, setEditing] = useState<string>();
   const [locations, setLocations] = useState<Record<string, FileSystemDirectoryHandle>>({});
   useEffect(() => {
     let disposed = false;
@@ -549,6 +552,9 @@ export function VideoDownload({
   async function savePrepared(...args: Parameters<typeof saveDownload>) {
     setTransferring(true);
     try {
+      args[9] = itemsRef.current.find(
+        item => item.url && lectureId(item.url, '') === lectureId(args[0].url, '')
+      )?.filename;
       await saveDownload(...args);
     } finally {
       setTransferring(false);
@@ -843,6 +849,7 @@ export function VideoDownload({
             preferences.video && saved.video && preferences.transcript && !saved.transcript;
           next.push({
             id: item.id,
+            filename: previous?.filename,
             title: item.title || 'Untitled',
             section: section.title,
             url: item.url,
@@ -1161,22 +1168,31 @@ export function VideoDownload({
             const stored = (await chrome.storage.local.get(queueKey(next.url)))[
               queueKey(next.url)
             ] as DownloadItem[] | undefined;
-            if (stored?.length) {
-              const id = lectureId(next.url, '');
-              await persistItems(
-                stored.map(item =>
-                  item.url && lectureId(item.url, '') === id
-                    ? {
-                        ...item,
-                        status: result.status,
-                        saved: result.saved,
-                        error: result.warning || undefined,
-                      }
-                    : item
-                ),
-                next.url
-              );
-            }
+            const id = lectureId(next.url, '');
+            const rows = stored?.length
+              ? stored
+              : [
+                  {
+                    id,
+                    url: next.url,
+                    title: next.title,
+                    selected: true,
+                    status: 'pending' as const,
+                  },
+                ];
+            await persistItems(
+              rows.map(item =>
+                (item.url && lectureId(item.url, '') === id) || item.id === id
+                  ? {
+                      ...item,
+                      status: result.status,
+                      saved: result.saved,
+                      error: result.warning || undefined,
+                    }
+                  : item
+              ),
+              next.url
+            );
             trace.current('run_finished', {
               result: result.status,
               video: result.saved.video,
@@ -1185,7 +1201,6 @@ export function VideoDownload({
           });
           setContext(next);
           setSource(next.sources[0] || '');
-          if (context && groupKey(context.url) !== groupKey(next.url)) setItems([]);
         } catch (err) {
           trace.current('run_finished', { result: 'failed', code: classifyError(err) });
           report(err);
@@ -1304,6 +1319,44 @@ export function VideoDownload({
       </div>
     );
   }
+  function renderFilename(item: DownloadItem) {
+    return (
+      <div className="te-filename-control">
+        {editing === item.id ? (
+          <input
+            autoFocus
+            aria-label={`Save as filename: ${item.title}`}
+            className="te-filename-input"
+            value={item.filename ?? item.title}
+            disabled={busy}
+            onChange={event =>
+              void persistItems(
+                items.map(value =>
+                  value.id === item.id ? { ...value, filename: event.target.value } : value
+                ),
+                context!.url
+              )
+            }
+            onBlur={() => setEditing(undefined)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === 'Escape') setEditing(undefined);
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="te-text-button"
+            aria-label={`Edit filename: ${item.title}`}
+            disabled={busy}
+            onClick={() => setEditing(item.id)}
+          >
+            <Pencil size={12} />
+            {item.filename || 'Save as'}
+          </button>
+        )}
+      </div>
+    );
+  }
   function renderCancel() {
     return (
       <button
@@ -1382,7 +1435,7 @@ export function VideoDownload({
           Settings are saved in this Chrome profile across extension updates.
         </p>
         <button
-          className="te-btn"
+          className="te-btn te-folder-setting"
           disabled={busy || settingsLocked}
           onClick={() => void chooseFolder()}
         >
@@ -1457,6 +1510,7 @@ export function VideoDownload({
             <h2 className="te-download-title" title={single?.title || title || context?.title}>
               {single?.title || title || context?.title || 'Connect to a video'}
             </h2>
+            {single && single.status === 'pending' && !downloaded && renderFilename(single)}
             {!downloaded &&
               !sourceClosed &&
               single?.status !== 'failed' &&
@@ -1663,6 +1717,9 @@ export function VideoDownload({
                       </div>
                       <div className="te-item-copy">
                         <span className="te-item-title">{item.title}</span>
+                        {!getSaved(item, preferences).video &&
+                          item.status === 'pending' &&
+                          renderFilename(item)}
                         {renderStatus(item, false, true)}
                       </div>
                     </div>
