@@ -11,6 +11,7 @@ export async function loadPreferences(): Promise<Preferences> {
     video: typeof data?.video === 'boolean' ? data.video : true,
     transcript: typeof data?.transcript === 'boolean' ? data.transcript : true,
     automatic: typeof data?.automatic === 'boolean' ? data.automatic : false,
+    ...(data?.reload === true ? { reload: true } : {}),
     ...(data?.format === 'mp4' || data?.format === 'webm' ? { format: data.format } : {}),
     ...(typeof maxHeight === 'number' &&
     Number.isInteger(maxHeight) &&

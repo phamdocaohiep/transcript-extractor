@@ -4,6 +4,7 @@ export interface Preferences {
   automatic: boolean;
   format?: 'mp4' | 'webm';
   maxHeight?: number;
+  reload?: boolean;
 }
 export const selectionKey = (value: Pick<Preferences, 'format' | 'maxHeight'>) =>
   `${value.format || 'auto'}:${value.maxHeight || 0}`;

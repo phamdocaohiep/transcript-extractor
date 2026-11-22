@@ -42,24 +42,51 @@ export function DownloadQueues({
   const [entries, setEntries] = useState<Entry[]>([]);
   const [selected, setSelected] = useState<number>();
   const [states, setStates] = useState<Record<number, QueueState>>({});
+  const entriesRef = useRef(entries);
+  const statesRef = useRef(states);
+  entriesRef.current = entries;
+  statesRef.current = states;
   const [message, setMessage] = useState('');
   const dismissed = useRef(new Map<number, string>());
   const addresses = useRef(new Map<number, string>());
   const busy = Object.values(states).some(state => state.busy);
 
-  const receive = useCallback((id: number, state: QueueState) => {
+  const discard = useCallback((id: number) => {
+    const remaining = entriesRef.current.filter(entry => entry.id !== id);
+    entriesRef.current = remaining;
+    setEntries(remaining);
+    setSelected(previous => (previous === id ? remaining[0]?.id : previous));
     setStates(previous => {
-      const old = previous[id];
-      if (
-        old &&
-        Object.keys(state).every(
-          key => old[key as keyof QueueState] === state[key as keyof QueueState]
-        )
-      )
-        return previous;
-      return { ...previous, [id]: state };
+      const next = { ...previous };
+      delete next[id];
+      return next;
     });
   }, []);
+  const receive = useCallback(
+    (id: number, state: QueueState) => {
+      if (!entriesRef.current.some(entry => entry.id === id)) return;
+      if (
+        entriesRef.current.some(entry => entry.id === id && entry.closed) &&
+        !state.busy &&
+        !state.transferring
+      ) {
+        discard(id);
+        return;
+      }
+      setStates(previous => {
+        const old = previous[id];
+        if (
+          old &&
+          Object.keys(state).every(
+            key => old[key as keyof QueueState] === state[key as keyof QueueState]
+          )
+        )
+          return previous;
+        return { ...previous, [id]: state };
+      });
+    },
+    [discard]
+  );
 
   useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
 
@@ -105,14 +132,13 @@ export function DownloadQueues({
     };
     const removed = (id: number) => {
       revision++;
-      setEntries(previous =>
-        previous.map(entry => (entry.id === id ? { ...entry, closed: true } : entry))
-      );
-      setStates(previous => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
+      if (statesRef.current[id]?.transferring) {
+        const next = entriesRef.current.map(entry =>
+          entry.id === id ? { ...entry, closed: true } : entry
+        );
+        entriesRef.current = next;
+        setEntries(next);
+      } else discard(id);
     };
     const activated = () => update();
     update();
@@ -128,18 +154,11 @@ export function DownloadQueues({
       chrome.tabs.onRemoved.removeListener(removed);
       chrome.tabs.onCreated.removeListener(created);
     };
-  }, []);
+  }, [discard]);
 
   function closeQueue(id: number) {
     dismissed.current.set(id, addresses.current.get(id) || '');
-    const remaining = entries.filter(value => value.id !== id);
-    setEntries(remaining);
-    setSelected(previous => (previous === id ? remaining[0]?.id : previous));
-    setStates(previous => {
-      const next = { ...previous };
-      delete next[id];
-      return next;
-    });
+    discard(id);
   }
 
   const grouped = entries.filter(entry => (states[entry.id]?.total || 0) > 1);
@@ -165,7 +184,7 @@ export function DownloadQueues({
               {grouped.map((entry, index) => {
                 const state = states[entry.id];
                 const status = entry.closed
-                  ? 'Tab closed — stopped'
+                  ? 'Finishing download'
                   : state?.needsAccess
                     ? 'Waiting for permission'
                     : state?.busy
@@ -215,21 +234,18 @@ export function DownloadQueues({
               if ((states[entry.id]?.total || 0) <= 1) setSelected(entry.id);
             }}
           >
-            {entry.closed ? (
-              <p role="status">
-                Tab closed — stopped. The source tab was closed. Reopen the source page to resume
-                saved progress.
-              </p>
-            ) : (
-              <VideoDownload
-                sourceTabId={entry.id}
-                screen={screen}
-                active={visible && selected === entry.id}
-                settingsLocked={busy}
-                onClose={() => closeQueue(entry.id)}
-                onStateChange={receive}
-              />
+            {entry.closed && (
+              <p role="status">Source tab closed. Finishing the current download only.</p>
             )}
+            <VideoDownload
+              sourceTabId={entry.id}
+              screen={screen}
+              active={visible && selected === entry.id}
+              settingsLocked={busy}
+              onClose={() => closeQueue(entry.id)}
+              onStateChange={receive}
+              sourceClosed={entry.closed}
+            />
           </div>
         )
       )}

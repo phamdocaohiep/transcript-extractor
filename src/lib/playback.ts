@@ -4,17 +4,17 @@ import { selectStreams } from './stream-discovery';
 
 export class MissingStreamError extends Error {}
 
-/** Prime a lazy player, then reload once if its stream is still unavailable. */
+/** Observe the player's existing streams; reload only when explicitly configured. */
 export async function resolvePlayback(
   url: string,
   read: () => Promise<VideoDownloadContext>,
-  prime: () => Promise<unknown>,
   reload: () => Promise<unknown>,
   signal: AbortSignal,
-  retrying: () => void
+  retrying: () => void,
+  allowReload = false
 ): Promise<VideoDownloadContext> {
   let last: VideoDownloadContext | undefined;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < (allowReload ? 2 : 1); attempt++) {
     if (attempt) {
       retrying();
       await reload();
@@ -43,7 +43,6 @@ export async function resolvePlayback(
           (next.kind === 'quiz' || next.kind === 'article')
         )
           return next;
-        await prime().catch(() => undefined);
       }
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(done, 500);
@@ -70,9 +69,11 @@ export async function resolvePlayback(
     return last;
   if (last?.streams)
     throw new MissingStreamError(
-      `Could not prepare this video's playback session after reloading. ${last.diagnostics || 'The player did not expose complete video and audio streams.'}`
+      `No downloadable stream is ready. Play the video manually if needed. ${last.diagnostics || 'The player did not expose complete video and audio streams.'}`
     );
-  throw new MissingStreamError('The player has no supported HLS or MP4 stream after reloading.');
+  throw new MissingStreamError(
+    'The player has no supported HLS or MP4 stream. Play the video manually if needed.'
+  );
 }
 
 export function canRetryDownload(error: unknown): boolean {

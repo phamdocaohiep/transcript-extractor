@@ -46,6 +46,13 @@ it('persists quality preferences and ignores invalid values from stored settings
   expect(await loadPreferences()).not.toHaveProperty('format');
   expect(await loadPreferences()).not.toHaveProperty('maxHeight');
 });
+it('keeps automatic reload off unless explicitly enabled and persists that choice', async () => {
+  expect((await loadPreferences()).reload).not.toBe(true);
+  await savePreferences({ video: true, transcript: true, automatic: false, reload: true });
+  expect((await loadPreferences()).reload).toBe(true);
+  await savePreferences({ video: true, transcript: true, automatic: false, reload: false });
+  expect((await loadPreferences()).reload).not.toBe(true);
+});
 
 it('does not ask again for a folder whose permission is already granted', async () => {
   const { hasDirectoryAccess } = await import('./preferences');

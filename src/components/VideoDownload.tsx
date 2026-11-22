@@ -36,6 +36,7 @@ export interface QueueState {
   saved: number;
   total: number;
   error: boolean;
+  transferring?: boolean;
 }
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Download failed.');
 const sleep = (signal: AbortSignal) =>
@@ -61,6 +62,7 @@ export function VideoDownload({
   settingsLocked = false,
   onStateChange,
   onClose,
+  sourceClosed = false,
 }: {
   sourceTabId?: number;
   screen?: 'main' | 'settings';
@@ -69,6 +71,7 @@ export function VideoDownload({
   settingsLocked?: boolean;
   onStateChange?: (tabId: number, state: QueueState) => void;
   onClose?: () => void;
+  sourceClosed?: boolean;
 } = {}) {
   const tabId = sourceTabId ?? Number(new URLSearchParams(location.search).get('tab'));
 
@@ -117,6 +120,9 @@ export function VideoDownload({
     };
   }, [context, preferences.video]);
   const [busy, setBusy] = useState(false);
+  const [transferring, setTransferring] = useState(false);
+  const closed = useRef(sourceClosed);
+  closed.current = sourceClosed;
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [hosts, setHosts] = useState<string[]>([]);
@@ -132,6 +138,7 @@ export function VideoDownload({
       saved: counts.saved,
       total: counts.total,
       error: !!error,
+      transferring,
     });
   }, [
     onStateChange,
@@ -143,6 +150,7 @@ export function VideoDownload({
     counts.saved,
     counts.total,
     error,
+    transferring,
   ]);
   useEffect(() => {
     onBusyChange?.(busy);
@@ -200,7 +208,7 @@ export function VideoDownload({
     }
     if (reply.data.protocolVersion !== PROTOCOL_VERSION)
       throw new PageConnectionError(
-        'The page is running an older extension script. Reconnecting after reload.'
+        'The page is running an older extension script. Reload the source page manually or enable automatic reload in Settings.'
       );
     const next = reply.data as VideoDownloadContext;
     const url = new URL(next.url);
@@ -275,7 +283,13 @@ export function VideoDownload({
       try {
         next = reloadPage ? await waitForContext(abort.signal) : await pageContext();
       } catch (err) {
-        if (!(err instanceof PageConnectionError) || reloadPage) throw err;
+        if (
+          !(err instanceof PageConnectionError) ||
+          reloadPage ||
+          !settings.current.reload ||
+          closed.current
+        )
+          throw err;
         setNotice('Reconnecting to the page…');
         await chrome.tabs.reload(tabId);
         next = await waitForContext(abort.signal);
@@ -296,7 +310,8 @@ export function VideoDownload({
     try {
       return await pageContext();
     } catch (err) {
-      if (!(err instanceof PageConnectionError)) throw err;
+      if (!(err instanceof PageConnectionError) || !settings.current.reload || closed.current)
+        throw err;
       setNotice('Reconnecting to the source page…');
       setBusy(true);
       await chrome.tabs.reload(tabId);
@@ -313,6 +328,7 @@ export function VideoDownload({
         const granted = folder ? await hasDirectoryAccess(folder).catch(() => false) : false;
         if (disposed) return;
         setPreferences(value);
+        settings.current = value;
         setDirectory(folder);
         setAccess(granted);
         setLoaded(true);
@@ -374,6 +390,7 @@ export function VideoDownload({
     try {
       await savePreferences(value);
       setPreferences(value);
+      settings.current = value;
       if (
         value.video !== preferences.video ||
         value.transcript !== preferences.transcript ||
@@ -383,6 +400,7 @@ export function VideoDownload({
         removed.current.clear();
       }
       automaticAttempt.current = '';
+      if (value.reload && !preferences.reload && !context && !closed.current) await refresh();
     } catch (err) {
       report(err);
     }
@@ -441,14 +459,22 @@ export function VideoDownload({
     return resolvePlayback(
       next.url,
       pageContext,
-      () => send('PREPARE_DOWNLOAD'),
       () => chrome.tabs.reload(tabId),
       signal,
       () => {
         trace.current('retry');
         setNotice('Reloading the page and retrying the video…');
-      }
+      },
+      !!preferences.reload && !closed.current
     );
+  }
+  async function savePrepared(...args: Parameters<typeof saveDownload>) {
+    setTransferring(true);
+    try {
+      await saveDownload(...args);
+    } finally {
+      setTransferring(false);
+    }
   }
   async function saveWithRetry(
     next: VideoDownloadContext,
@@ -487,7 +513,7 @@ export function VideoDownload({
             }
             throw err;
           }
-          await saveDownload(
+          await savePrepared(
             current,
             null,
             result.text,
@@ -514,7 +540,7 @@ export function VideoDownload({
         );
         const actual = { ...choice, transcript: choice.transcript && !!result.text.trim() };
         if (actual.video || actual.transcript)
-          await saveDownload(
+          await savePrepared(
             current,
             result.plan,
             result.text,
@@ -536,7 +562,7 @@ export function VideoDownload({
           },
         };
       } catch (err) {
-        if (attempt || !canRetryDownload(err)) throw err;
+        if (attempt || !canRetryDownload(err) || !preferences.reload || closed.current) throw err;
         signal.throwIfAborted();
         setNotice('Reloading the page and retrying the download…');
         trace.current('retry', { code: classifyError(err) });
@@ -619,6 +645,8 @@ export function VideoDownload({
     `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}${preferences.format || preferences.maxHeight ? `:quality:${selectionKey(preferences)}` : ''}`;
   const queueKey = (url: string) => `${legacyQueueKey(url)}:tab:${tabId}`;
   async function persistItems(value: DownloadItem[], url: string) {
+    if (value.length === 1 && value[0].available !== false)
+      value = [{ ...value[0], selected: true }];
     await chrome.storage.local.set({ [queueKey(url)]: value });
     setItems(value.map(item => ({ ...item })));
   }
@@ -831,6 +859,7 @@ export function VideoDownload({
       await navigator.locks.request(`download-${tabId}`, { ifAvailable: true }, async lock => {
         if (!lock) throw new Error('Another download window is using this tab.');
         for (const item of next) {
+          if (closed.current) break;
           if (!item.selected || item.status === 'completed' || item.status === 'skipped') continue;
           abort.signal.throwIfAborted();
           item.status = 'downloading';
@@ -838,6 +867,8 @@ export function VideoDownload({
           await persistItems([...next], root);
           try {
             let current = await connect(abort.signal);
+            abort.signal.throwIfAborted();
+            if (closed.current) break;
             if (item.url && lectureId(current.url, '') !== lectureId(item.url, '')) {
               if (groupKey(item.url) !== groupKey(root))
                 throw new Error('Item URL is outside this collection.');
@@ -940,7 +971,7 @@ export function VideoDownload({
     )
       return;
     const timer = setInterval(() => {
-      if (working.current) return;
+      if (working.current || closed.current) return;
       working.current = true;
       void (async () => {
         const abort = new AbortController();
@@ -949,6 +980,15 @@ export function VideoDownload({
           const next = await connect(abort.signal);
           const address = new URL(next.url);
           if (/(^|\.)youtube\.com$/.test(address.hostname) && address.pathname === '/playlist')
+            return;
+          if (
+            preferences.video &&
+            (next.kind === 'video' || next.hasPlayer) &&
+            !next.protected &&
+            !next.sources.length &&
+            !selectStreams(next.streams || []) &&
+            !next.adaptive
+          )
             return;
           const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
           if (automaticAttempt.current === key) return;
@@ -1038,12 +1078,32 @@ export function VideoDownload({
   const incomplete = !!listSize && listSize.loaded < listSize.expected;
   const eligible = items.filter(item => item.available !== false);
   const single = items.length === 1 ? items[0] : undefined;
-  function renderStatus(item: DownloadItem) {
+  const downloaded = single
+    ? preferences.video
+      ? getSaved(single, preferences).video
+      : getSaved(single, preferences).transcript
+    : false;
+  function renderStatus(item: DownloadItem, compact = false) {
+    const saved = getSaved(item, preferences);
+    const label = compact
+      ? saved.video
+        ? saved.transcript
+          ? '1 video & transcript downloaded'
+          : '1 video / no transcript downloaded'
+        : saved.transcript
+          ? '1 transcript downloaded'
+          : item.status === 'pending'
+            ? 'Ready'
+            : item.status
+      : item.status === 'partial'
+        ? 'Video saved; transcript missing'
+        : item.status;
     return (
       <div className="te-item-status">
-        <span className="te-muted text-sm">
+        <span className="te-muted text-sm" title={item.error}>
           {' '}
-          — {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
+          {compact ? '' : '— '}
+          {label}
         </span>
         {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
           <button
@@ -1063,7 +1123,9 @@ export function VideoDownload({
             <Trash2 size={14} />
           </button>
         )}
-        {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
+        {item.error && (!compact || !saved.video) && (
+          <span className="te-muted text-sm"> · {item.error}</span>
+        )}
       </div>
     );
   }
@@ -1092,6 +1154,17 @@ export function VideoDownload({
             onChange={e => void changePreferences({ ...preferences, transcript: e.target.checked })}
           />{' '}
           Transcript (Markdown)
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={!!preferences.reload}
+            disabled={busy || settingsLocked || !loaded}
+            onChange={event =>
+              void changePreferences({ ...preferences, reload: event.target.checked })
+            }
+          />{' '}
+          Automatically reload the source page to recover a download
         </label>
         <label>
           <input
@@ -1141,7 +1214,7 @@ export function VideoDownload({
               thumbnail={context?.thumbnail}
               title={title || context?.title || 'Video'}
             />
-            {!!items.length && (
+            {items.length > 1 && (
               <input
                 type="checkbox"
                 className="te-preview-checkbox"
@@ -1164,82 +1237,90 @@ export function VideoDownload({
             <h2 className="te-download-title" title={single?.title || title || context?.title}>
               {single?.title || title || context?.title || 'Connect to a video'}
             </h2>
-            <div className="te-download-toolbar">
-              {preferences.video && (
-                <select
-                  className="te-select te-quality-picker"
-                  aria-label="Video quality"
-                  value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
-                  disabled={busy || settingsLocked || qualityLoading}
-                  onChange={event => {
-                    const [format, height] = event.target.value.split(':');
-                    void changePreferences({
-                      ...preferences,
-                      format: format === 'auto' ? undefined : (format as 'mp4' | 'webm'),
-                      maxHeight: Number(height) || undefined,
-                    });
-                  }}
-                >
-                  <option value="auto:0">Auto quality</option>
-                  {renditions.map(item => (
-                    <option
-                      key={`${item.format}:${item.height}`}
-                      value={`${item.format}:${item.height}`}
-                    >
-                      {item.format.toUpperCase()} · {item.height ? `${item.height}p` : 'Source'}
-                    </option>
-                  ))}
-                  {(preferences.format || preferences.maxHeight) &&
-                    !renditions.some(
-                      item =>
-                        item.format === preferences.format &&
-                        item.height === (preferences.maxHeight || 0)
-                    ) && (
+            {!downloaded && !sourceClosed && (
+              <div className="te-download-toolbar">
+                {preferences.video && (
+                  <select
+                    className="te-select te-quality-picker"
+                    aria-label="Video quality"
+                    value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                    disabled={busy || settingsLocked || qualityLoading}
+                    onChange={event => {
+                      const [format, height] = event.target.value.split(':');
+                      void changePreferences({
+                        ...preferences,
+                        format: format === 'auto' ? undefined : (format as 'mp4' | 'webm'),
+                        maxHeight: Number(height) || undefined,
+                      });
+                    }}
+                  >
+                    <option value="auto:0">Auto quality</option>
+                    {renditions.map(item => (
                       <option
-                        value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                        key={`${item.format}:${item.height}`}
+                        value={`${item.format}:${item.height}`}
                       >
-                        {preferences.format?.toUpperCase() || 'Auto'} ·{' '}
-                        {preferences.maxHeight ? `≤${preferences.maxHeight}p` : 'Source'}
+                        {item.format.toUpperCase()} · {item.height ? `${item.height}p` : 'Source'}
                       </option>
-                    )}
-                </select>
-              )}
-              <button
-                className="te-btn-primary te-download-button"
-                disabled={
-                  busy ||
-                  qualityLoading ||
-                  !context ||
-                  !validChoice ||
-                  !items.some(
-                    item =>
-                      item.selected && item.status !== 'completed' && item.status !== 'skipped'
-                  )
-                }
-                onClick={() => void runQueue()}
-              >
-                <Download size={15} />
-                Download
-              </button>
-            </div>
-            {single && renderStatus(single)}
-            <p className="te-muted te-card-status">
-              {items.filter(item => item.selected).length} selected ·{' '}
-              {preferences.video && (
-                <>
-                  {counts.video}/{counts.total} videos saved
-                </>
-              )}
-              {preferences.video && preferences.transcript && ' · '}
-              {preferences.transcript && (
-                <>
-                  {counts.transcript}/{counts.total} transcripts saved
-                </>
-              )}
-            </p>
+                    ))}
+                    {(preferences.format || preferences.maxHeight) &&
+                      !renditions.some(
+                        item =>
+                          item.format === preferences.format &&
+                          item.height === (preferences.maxHeight || 0)
+                      ) && (
+                        <option
+                          value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                        >
+                          {preferences.format?.toUpperCase() || 'Auto'} ·{' '}
+                          {preferences.maxHeight ? `≤${preferences.maxHeight}p` : 'Source'}
+                        </option>
+                      )}
+                  </select>
+                )}
+                <button
+                  className="te-btn-primary te-download-button"
+                  disabled={
+                    busy ||
+                    qualityLoading ||
+                    !context ||
+                    !validChoice ||
+                    !items.some(
+                      item =>
+                        item.selected && item.status !== 'completed' && item.status !== 'skipped'
+                    )
+                  }
+                  onClick={() => void runQueue()}
+                >
+                  <Download size={15} />
+                  Download
+                </button>
+              </div>
+            )}
+            {single && renderStatus(single, true)}
+            {!single && (
+              <p className="te-muted te-card-status">
+                {items.filter(item => item.selected).length} selected ·{' '}
+                {preferences.video && (
+                  <>
+                    {counts.video}/{counts.total} videos saved
+                  </>
+                )}
+                {preferences.video && preferences.transcript && ' · '}
+                {preferences.transcript && (
+                  <>
+                    {counts.transcript}/{counts.total} transcripts saved
+                  </>
+                )}
+              </p>
+            )}
           </div>
         </div>
-        {preferences.video && context?.sources.length && !renditions.length ? (
+        {!downloaded &&
+        !sourceClosed &&
+        preferences.video &&
+        context?.sources.length &&
+        !renditions.length ? (
           <button
             type="button"
             className="te-text-button"
@@ -1263,7 +1344,7 @@ export function VideoDownload({
             {qualityLoading ? 'Reading qualities…' : 'Detect available qualities'}
           </button>
         ) : null}
-        {qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
+        {!downloaded && qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
         {listSize && listSize.expected !== listSize.unique && (
           <p className="te-muted text-sm">
             {listSize.loaded}/{listSize.expected} playlist entries loaded · {listSize.unique} unique
@@ -1371,7 +1452,7 @@ export function VideoDownload({
           </button>
         </div>
       </dialog>
-      {(progress.total > 0 || progress.bytes > 0) && (
+      {!downloaded && (progress.total > 0 || progress.bytes > 0) && (
         <div>
           {progress.total > 0 && (
             <progress className="w-full" value={progress.completed} max={progress.total} />
@@ -1387,7 +1468,7 @@ export function VideoDownload({
           Cancel
         </button>
       )}
-      {notice && (
+      {notice && !downloaded && (
         <p role="status" className="te-glass p-4">
           {notice}
         </p>

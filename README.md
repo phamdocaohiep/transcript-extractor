@@ -112,9 +112,11 @@ leaving its source tab and saved files intact. It stays dismissed for that colle
 or the tab moves to another collection.
 
 The compact download card places a preview beside its title, one combined **Video quality** picker,
-and a small Download button. Selection checkboxes sit at the top left of previews. Single videos appear
+and a small Download button. Multi-video selection checkboxes sit at the top left of previews. Single videos have no checkbox and appear
 directly without a duplicate queue entry or **Videos (1)** list. Only multi-video sources have a lower queue
 entry and **Videos** disclosure for item selection and detailed statuses.
+After a single video is saved, its format picker, Download button and transfer counters are replaced by
+one compact result: video and transcript downloaded, or video downloaded without a transcript.
 The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
 height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
 playlist without downloading media segments. A fixed-quality source stays at its original quality. These
@@ -126,9 +128,10 @@ an error directing you to Settings. If the saved folder needs renewed access, Do
 Chrome's native permission dialog and continues immediately when access is granted.
 Settings can be opened while downloading without interrupting the job.
 
-The extension primes lazy video players automatically. If a supported stream fails to appear,
-it reloads the source page once. Expired links and temporary network failures also trigger a bounded
-reload and retry. Text-only pages are skipped for video, with their transcript saved when available.
+The downloader never starts video playback. It reads existing streams and, if needed, asks you to play
+the source manually. Automatic mode waits quietly until a stream becomes available. Automatic page reload
+is off by default; **Settings → Automatically reload the source page to recover a download** enables bounded
+reload/retry for stale scripts, missing streams and transient failures. Text-only pages are skipped for video, with their transcript saved when available.
 A player that still has no supported HLS or MP4 stream is reported separately from a page without a player.
 Video pages are not skipped just because the player element has not rendered yet.
 When transcript extraction fails, the video is still saved and the item reports a partial result;
@@ -153,7 +156,9 @@ watched independently. A host grant is reused by other waiting queues. Only the 
 permission dialog, so a background queue does not interrupt another queue's controls.
 Folder and format settings are shared; they cannot be changed during active transfers. Queue snapshots
 are stored separately by source tab, with existing saved-artifact progress retained. Closing a source tab
-stops only its queue. Keep the extension panel open during transfers; closing or reloading it stops its workers.
+removes its waiting queue immediately. A transfer already prepared and running inside the extension may finish
+without the source tab; it never opens the next item or reloads the closed tab, and is removed when finished.
+Keep the extension panel open during transfers; closing or reloading it stops its workers.
 Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
 The extension reads existing playlist rows first. If more rows are needed and the playlist has an internal
 overflow container, only that container is scrolled and its position restored. The page viewport is never
@@ -175,7 +180,7 @@ Transcript failures do not prevent saving the video.
 SABR/UMP playback uses a bundled protocol reader and the current player's captured request context.
 A small observer runs at document start on YouTube and leaves the player's requests and responses unchanged.
 The playback context stays in memory and is not included in settings, queue records or logs. A page already
-open before the extension update is reloaded automatically to load the observer. Both tracks are consumed
+open before the extension update may need a manual reload to load the observer (or the optional automatic-reload setting). Both tracks are consumed
 concurrently, checked against the advertised duration, and combined using the same browser-only muxer.
 
 This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,

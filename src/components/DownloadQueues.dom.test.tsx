@@ -33,6 +33,7 @@ vi.mock('./VideoDownload', () => ({
       () =>
         onStateChange(id, {
           busy: status === 'Downloading',
+          transferring: status === 'Downloading',
           needsAccess: status === 'Permission',
           title: `Source ${id}`,
           saved: 0,
@@ -138,18 +139,19 @@ it('keeps a paused source mounted while another YouTube tab and an Udemy tab sta
   expect(stopped).toEqual([]);
 });
 
-it('adds supported open tabs once and stops only the worker whose source tab closes', async () => {
+it('removes closed waiting tabs immediately and finishes only an active transfer', async () => {
   await render();
-  await select(1);
-  await select(1);
-  expect(container.textContent).not.toContain('Add open tabs');
-  expect([...mounted]).toEqual([1, 2, 3]);
+  await act(async () => removed(3));
+  expect(mounted.has(3)).toBe(false);
   await click('Start 1');
   await click('Start 2');
   await act(async () => removed(1));
-  expect([...mounted]).toEqual([2, 3]);
-  expect(stopped).toEqual([1]);
-  expect(container.textContent).toContain('Tab closed — stopped');
+  expect(mounted.has(1)).toBe(true);
+  expect(container.textContent).toContain('Finishing the current download only');
+  await click('Cancel 1');
+  expect(mounted.has(1)).toBe(false);
+  expect(mounted.has(2)).toBe(true);
+  expect(stopped).toEqual([3, 1]);
   expect(onBusy).toHaveBeenLastCalledWith(true);
 });
 

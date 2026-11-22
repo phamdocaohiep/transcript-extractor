@@ -51,12 +51,12 @@ it('does not treat a click that leaves the lecture unchanged as a successful nav
   await expect(result).resolves.toBe(false);
 });
 
-it('starts a lazy player through its play button when no video element exists yet', async () => {
+it('never clicks the play button when preparing a download', async () => {
   document.body.innerHTML = '<button data-purpose="video-play-button">Play</button>';
   const click = vi.fn();
   document.querySelector('button')!.addEventListener('click', click);
   const respond = vi.fn();
   await content.handleMessage({ type: 'PREPARE_DOWNLOAD' }, respond);
-  expect(click).toHaveBeenCalledOnce();
+  expect(click).not.toHaveBeenCalled();
   expect(respond).toHaveBeenCalledWith({ success: true });
 });

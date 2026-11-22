@@ -228,7 +228,7 @@ it('detects available HLS qualities and downloads the selected resolution', asyn
   expect(
     vi.mocked(fetch).mock.calls.some(([url]) => String(url) === 'https://cdn.test/1080.m3u8')
   ).toBe(false);
-  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
 });
 it('shows a single video directly with selection on its preview and no duplicate list', async () => {
   await render();
@@ -237,18 +237,15 @@ it('shows a single video directly with selection on its preview and no duplicate
   expect(toolbar.querySelector('.te-download-button')?.textContent).toBe('Download');
   expect(container.querySelectorAll('.te-download-button')).toHaveLength(1);
   expect(container.querySelector('.te-item-details')).toBeNull();
-  const checkbox = container.querySelector<HTMLInputElement>(
-    '.te-download-card-head .te-preview-selection input'
-  )!;
-  expect(checkbox.checked).toBe(true);
-  expect(checkbox.getAttribute('aria-label')).toBe('Select First lecture');
-  await act(async () => checkbox.click());
-  expect(container.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(true);
+  expect(container.querySelector('.te-download-card-head input[type="checkbox"]')).toBeNull();
 });
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
   await click('Choose destination folder');
   await click('Download');
+  expect(container.querySelector('.te-download-toolbar')).toBeNull();
+  expect(container.querySelector('[aria-label="Video quality"]')).toBeNull();
+  expect(container.textContent).toContain('1 video & transcript downloaded');
   const remove = container.querySelector<HTMLButtonElement>(
     '[aria-label="Remove downloaded item: First lecture"]'
   )!;
@@ -260,6 +257,15 @@ it('removes a downloaded row without deleting files or forgetting saved progress
     video: true,
     transcript: true,
   });
+});
+it('does not reload a stale source by default', async () => {
+  (chrome.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    success: false,
+    error: 'Unknown message type',
+  });
+  await render();
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('older extension script');
 });
 it('shows a lower list only for multiple videos, with each checkbox on its preview', async () => {
   listing = [1, 2].map(id => ({
@@ -289,8 +295,8 @@ it('allows another quality to download while reusing the previously saved transc
   const base = 'download_completed:https://www.udemy.com/course/test/learn/lecture/1';
   stored[base] = { video: true, transcript: true };
   await render();
-  expect(container.textContent).toContain('0/1 videos saved');
-  expect(container.textContent).toContain('1/1 transcripts saved');
+  expect(container.textContent).toContain('1 transcript downloaded');
+  expect(container.textContent).toMatch(/1 (?:video & )?transcript downloaded/);
   await click('Choose destination folder');
   await click('Download');
   expect(Object.keys(writes)).toHaveLength(1);
@@ -327,7 +333,13 @@ it('streams a direct MP4 with the existing Chrome session', async () => {
   expect(writes[name].close).toHaveBeenCalledOnce();
   expect(fetch).toHaveBeenCalledWith(videoUrl, expect.objectContaining({ credentials: 'include' }));
 });
-it('reloads a tab with an older content script and reconnects without reopening the downloader', async () => {
+it('reloads an older content script only when the option is enabled', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    reload: true,
+  });
   const send = chrome.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>;
   send.mockResolvedValueOnce({ success: false, error: 'Unknown message type' });
   await render();
@@ -356,7 +368,7 @@ it('downloads the current item when the source tab has navigated to another lect
   currentUrl = 'https://www.udemy.com/course/test/learn/lecture/2';
   await click('Download');
   expect(folder.getFileHandle).toHaveBeenCalled();
-  expect(container.textContent).toContain('1 saved');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
 });
 it('requests host permission only after an explicit click', async () => {
   vi.mocked(chrome.permissions.contains).mockImplementation(async () => false);
@@ -514,6 +526,12 @@ it('honors an unchecked item in the collection list', async () => {
   expect(container.textContent).toContain('1/2 videos saved');
 });
 it('resumes a failed queue without repeating a completed video', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    reload: true,
+  });
   listing = [1, 2].map(id => ({
     id: String(id),
     title: `Item ${id}`,
@@ -590,28 +608,45 @@ it('skips a page without a player and saves its available transcript', async () 
   expect(container.textContent).toContain('No video player');
 });
 
-it('primes the player automatically without requiring the user to press play', async () => {
+it('does not start playback or reload a missing stream by default', async () => {
   vi.useFakeTimers();
   hasSources = false;
-  const send = chrome.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>;
-  const original = send.getMockImplementation() as (...args: unknown[]) => Promise<unknown>;
-  send.mockImplementation(async (...args: unknown[]) => {
-    if ((args[1] as { type: string }).type === 'PREPARE_DOWNLOAD') hasSources = true;
-    return original(...args);
-  });
   await render();
   await click('Choose destination folder');
   await click('Download');
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(11000);
   });
-  expect(Object.keys(writes)).toHaveLength(2);
-  expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(
-    42,
-    { type: 'PREPARE_DOWNLOAD', data: undefined },
-    { frameId: 0 }
-  );
+  expect(Object.keys(writes)).toHaveLength(0);
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(
+    vi
+      .mocked(chrome.tabs.sendMessage)
+      .mock.calls.some(call => (call[1] as { type: string }).type === 'PREPARE_DOWNLOAD')
+  ).toBe(false);
+  expect(container.textContent).toContain('Play the video manually');
+});
+it('waits silently for a stream in automatic mode and downloads when it becomes available', async () => {
+  vi.useFakeTimers();
+  hasSources = false;
+  vi.mocked(loadPreferences).mockResolvedValue({ video: true, transcript: false, automatic: true });
+  await render();
+  await click('Choose destination folder');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4500);
+  });
+  expect(Object.keys(writes)).toHaveLength(0);
+  hasSources = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(Object.keys(writes)).toHaveLength(1);
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(
+    vi
+      .mocked(chrome.tabs.sendMessage)
+      .mock.calls.some(call => (call[1] as { type: string }).type === 'PREPARE_DOWNLOAD')
+  ).toBe(false);
 });
 it('continues the whole-course queue after a text-only page', async () => {
   vi.useFakeTimers();
@@ -654,7 +689,7 @@ it('keeps a download alive while switching between Main and Settings', async () 
     release(new Response('#EXTM3U\n#EXTINF:2,\na.ts\n#EXT-X-ENDLIST'));
   });
   await render('main');
-  expect(container.textContent).toContain('1 saved');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
   expect(Object.keys(writes)).toHaveLength(2);
   expect(Object.values(writes).every(writer => writer.close.mock.calls.length === 1)).toBe(true);
 });
@@ -773,10 +808,10 @@ it('allows the current video and offers a list retry when the curriculum is not 
   await render();
   expect(container.textContent).toContain('Only the current video is available');
   expect(container.textContent).toContain('Retry video list');
-  expect(container.querySelectorAll('.te-preview-selection input')).toHaveLength(1);
+  expect(container.querySelectorAll('.te-preview-selection input')).toHaveLength(0);
   await click('Choose destination folder');
   await click('Download');
-  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
 });
 it('offers a list retry without inventing a video when neither curriculum nor player is ready', async () => {
   listing = [];
@@ -794,8 +829,8 @@ it('restores saved progress for the current video while waiting for the full cur
     transcript: true,
   };
   await render();
-  expect(container.textContent).toContain('1/1 videos saved');
-  expect(container.textContent).toContain('1/1 transcripts saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
+  expect(container.textContent).toMatch(/1 (?:video & )?transcript downloaded/);
 });
 
 it('saves video and continues the queue even when transcript extraction fails', async () => {
@@ -969,7 +1004,7 @@ it('discovers the signed-in YouTube player in MAIN world and saves paired tracks
     expect.any(Function)
   );
   expect(Object.keys(writes).some(name => name.endsWith('.mp4'))).toBe(true);
-  expect(container.textContent).toContain('1 saved');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
 });
 
 it('downloads from a captured playback session when YouTube exposes no direct file URLs', async () => {
@@ -1028,7 +1063,7 @@ it('downloads from a captured playback session when YouTube exposes no direct fi
     expect.any(Function)
   );
   expect(getDirectoryHandle).toHaveBeenCalledWith('www.youtube.com_example', { create: true });
-  expect(container.textContent).toContain('1 saved');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
   expect(JSON.stringify(stored)).not.toContain('private-fixture-token');
 });
 
@@ -1054,7 +1089,7 @@ it('does not start an automatic retry immediately after a manual download fails'
   ).toBe(false);
 });
 
-it('counts a saved video separately from a missing transcript and preserves it on retry and reopen', async () => {
+it('shows a compact saved-without-transcript result and preserves it on reopen', async () => {
   const { loadCourseCollection } = await import('../lib/collection-store');
   vi.mocked(loadCourseCollection).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
   const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
@@ -1066,18 +1101,18 @@ it('counts a saved video separately from a missing transcript and preserves it o
   await render();
   await click('Choose destination folder');
   await click('Download');
-  expect(container.textContent).toContain('1/1 videos saved');
-  expect(container.textContent).toContain('0/1 transcripts saved');
-  expect(container.textContent).toContain('Finished: 1 saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
+  expect(container.textContent).toContain('1 video / no transcript downloaded');
+  expect(container.textContent).not.toContain('Finished: 1 saved');
   const mediaCount = vi.mocked(fetch).mock.calls.length;
-  await click('Download');
+  expect(container.querySelector('.te-download-toolbar')).toBeNull();
   expect(vi.mocked(fetch).mock.calls.length).toBe(mediaCount);
   expect(Object.keys(writes).filter(name => name.endsWith('.mp4'))).toHaveLength(1);
   await act(async () => root.unmount());
   root = createRoot(container);
   await render();
-  expect(container.textContent).toContain('1/1 videos saved');
-  expect(container.textContent).toContain('0/1 transcripts saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
+  expect(container.textContent).toContain('1 video / no transcript downloaded');
   const log = JSON.parse(await exportDiagnostics());
   expect(
     log.events.filter((entry: { event: string }) => entry.event === 'file_saved')
@@ -1135,17 +1170,23 @@ it('restores already-saved artifacts even when the selected formats use a differ
     transcript: false,
   };
   await render();
-  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toMatch(/1 video(?: & transcript| \/ no transcript) downloaded/);
   expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   const button = [...container.querySelectorAll('button')].find(
     value => value.textContent === 'Download'
   )!;
-  expect(button.disabled).toBe(true);
+  expect(button).toBeUndefined();
 });
 
 it.each([undefined, 2, 3])(
   'reloads stale page scripts with protocol %s after an extension update',
   async protocolVersion => {
+    vi.mocked(loadPreferences).mockResolvedValue({
+      video: true,
+      transcript: true,
+      automatic: false,
+      reload: true,
+    });
     vi.mocked(chrome.tabs.sendMessage).mockImplementationOnce(async () => ({
       success: true,
       data: {
@@ -1158,7 +1199,7 @@ it.each([undefined, 2, 3])(
     }));
     await render();
     expect(chrome.tabs.reload).toHaveBeenCalledOnce();
-    expect(container.querySelector('[aria-label="Select First lecture"]')).not.toBeNull();
+    expect(container.querySelector('.te-download-title')?.textContent).toBe('First lecture');
   }
 );
 
@@ -1212,6 +1253,62 @@ async function clickWorker(id: number, label: string) {
   expect(button.disabled).toBe(false);
   await act(async () => button.click());
 }
+it('finishes a prepared transfer after source closure without opening the next queued video', async () => {
+  configureParallel();
+  const originalSend = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
+    const result = (await originalSend(...args)) as unknown as {
+      success: boolean;
+      data: Record<string, unknown>;
+    };
+    if ((args[1] as { type: string }).type === 'GET_DOWNLOAD_ITEMS')
+      return {
+        success: true,
+        data: {
+          sections: [
+            {
+              lectures: ['first', 'second'].map(id => ({
+                id,
+                title: id,
+                url: `https://www.youtube.com/watch?v=${id}&list=PL123`,
+              })),
+            },
+          ],
+        },
+      };
+    if ((args[1] as { type: string }).type === 'GET_HLS_DOWNLOAD_CONTEXT')
+      return {
+        ...result,
+        data: { ...result.data, url: 'https://www.youtube.com/watch?v=first&list=PL123' },
+      };
+    return result;
+  });
+  const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+  let release: ((response: Response) => void) | undefined;
+  vi.mocked(fetch).mockImplementation(async (...args) =>
+    String(args[0]).includes('r42.googlevideo.com/a.ts')
+      ? new Promise<Response>(resolve => {
+          release = resolve;
+        })
+      : originalFetch(...args)
+  );
+  const state = vi.fn();
+  await act(async () => root.render(<VideoDownload sourceTabId={42} onStateChange={state} />));
+  await click('Download');
+  expect(state.mock.lastCall?.[1].transferring).toBe(true);
+  await act(async () =>
+    root.render(<VideoDownload sourceTabId={42} sourceClosed onStateChange={state} />)
+  );
+  const requests = vi.mocked(chrome.tabs.sendMessage).mock.calls.length;
+  const ts = new Uint8Array(188);
+  ts[0] = 0x47;
+  await act(async () => release!(new Response(ts)));
+  expect(Object.values(writes).filter(writer => writer.close.mock.calls.length)).toHaveLength(1);
+  expect(chrome.tabs.update).not.toHaveBeenCalled();
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(vi.mocked(chrome.tabs.sendMessage).mock.calls.length).toBe(requests);
+  expect(state.mock.lastCall?.[1].busy).toBe(false);
+});
 
 it('downloads an Udemy queue while a YouTube queue is transferring and cancels only the selected queue', async () => {
   configureParallel();
@@ -1245,11 +1342,15 @@ it('downloads an Udemy queue while a YouTube queue is transferring and cancels o
   await clickWorker(42, 'Download');
   expect(waiting).toBe(true);
   await clickWorker(43, 'Download');
-  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toMatch(
+    /1 video(?: & transcript| \/ no transcript) downloaded/
+  );
   expect(Object.values(writes).filter(writer => writer.close.mock.calls.length)).toHaveLength(1);
   await clickWorker(42, 'Cancel');
   expect(Object.values(writes).filter(writer => writer.abort.mock.calls.length)).toHaveLength(1);
-  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toMatch(
+    /1 video(?: & transcript| \/ no transcript) downloaded/
+  );
   expect(
     stored['download_queue:https://www.youtube.com/watch?v=first:true:false:tab:42']
   ).toBeDefined();
@@ -1292,8 +1393,12 @@ it('keeps a background permission pause and resumes it when another queue grants
   expect(container.querySelector('[data-worker="43"] dialog')!.hasAttribute('open')).toBe(true);
   await clickWorker(43, 'Allow listed video hosts');
   expect(chrome.permissions.request).toHaveBeenCalledOnce();
-  expect(container.querySelector('[data-worker="42"]')!.textContent).toContain('1/1 videos saved');
-  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(container.querySelector('[data-worker="42"]')!.textContent).toMatch(
+    /1 video(?: & transcript| \/ no transcript) downloaded/
+  );
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toMatch(
+    /1 video(?: & transcript| \/ no transcript) downloaded/
+  );
 });
 it('shares a folder selected in one queue with the other registered queues', async () => {
   configureParallel();
@@ -1313,5 +1418,7 @@ it('shares a folder selected in one queue with the other registered queues', asy
   await clickWorker(42, 'Choose destination folder');
   expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('Folder: Lessons');
   await clickWorker(43, 'Download');
-  expect(container.querySelector('[data-worker="43"]')!.textContent).toContain('1/1 videos saved');
+  expect(container.querySelector('[data-worker="43"]')!.textContent).toMatch(
+    /1 video(?: & transcript| \/ no transcript) downloaded/
+  );
 });

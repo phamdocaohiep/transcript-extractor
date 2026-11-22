@@ -84,7 +84,6 @@ export interface ContentScriptResponse {
 
 class ContentScript {
   private isInitialized = false;
-  private isPriming = false;
   private listController?: AbortController;
   private hlsSources = createHlsDiscovery();
   private batchState: {
@@ -238,20 +237,7 @@ class ContentScript {
         }
 
         case 'PREPARE_DOWNLOAD': {
-          const video = findPrimaryVideo();
-          if (!video) {
-            document.querySelector<HTMLElement>(
-              '[data-purpose="video-play-button"], [data-purpose="play-button"], .vjs-big-play-button, button[aria-label="Play"]'
-            )?.click();
-          }
-          if (video && video.paused && !this.isPriming) {
-            this.isPriming = true;
-            // Muted playback primes players that only request a manifest on play.
-            const muted = video.muted;
-            video.muted = true;
-            void video.play().catch(() => undefined);
-            setTimeout(() => { video.pause(); video.muted = muted; this.isPriming = false; }, 3000);
-          }
+          // Compatibility with older panels: preparing a download never starts playback.
           sendResponse({ success: true });
           break;
         }
