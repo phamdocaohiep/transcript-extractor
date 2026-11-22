@@ -182,10 +182,10 @@ requests/results, CDN origin patterns, response codes, retries and saved-file st
 tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
 first when the 1,000-entry limit is reached, preserving permission and result events where possible.
 
-YouTube CDN access for `https://*.googlevideo.com/*` and Udemy CDN access for `https://*.udemycdn.com/*`
-are declared with the extension's required host permissions.
-Chrome may ask for approval when installing or updating this permission; downloads reuse the family grant
-without asking for each video or server. If site access is withheld, the extension requests it before continuing.
+HTTPS network access (`https://*/*`) is declared as a required installation permission, including CDN hosts
+not known ahead of time. Chrome may ask for approval when installing or updating this permission;
+downloads reuse that grant without asking for each video or server. No optional host permission is declared.
+If site access is deliberately withheld in Chrome, access must be restored before downloading.
 Existing grants are checked through Chrome;
 folder permission is requested only if Chrome reports it is not already granted. The application access
 dialog and Chrome's native confirmation can both appear during an initial grant. The log distinguishes
@@ -437,8 +437,8 @@ Everything runs on your machine, and the build enforces it:
 - No library uploads or analytics; source-platform caption requests may occur during extraction
 - No telemetry, analytics, crash reporting or remote configuration
 - No account, ever
-- Required host permissions cover the three supported platforms and the Googlevideo/Udemy CDNs; **no all-URLs permission**, and
-  `check:store` fails the build if one appears
+- Required network access covers all HTTPS hosts at installation; automatic content scripts stay limited
+  to Udemy, Coursera and YouTube. `check:store` checks both policies and rejects all-protocol host grants
 - CSP is `script-src 'self'` — no `wasm-unsafe-eval`, because nothing evaluates generated code
 
 📖 **Full policy in [PRIVACY.md](PRIVACY.md)**

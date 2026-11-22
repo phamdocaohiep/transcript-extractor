@@ -84,13 +84,12 @@ rest of the extension is unaffected.
 | `storage` | Save your preferences and collected transcripts on this device |
 | `unlimitedStorage` | Keep captured screenshots; the default 10 MB cap holds only a few |
 | `clipboardWrite` | Copy a transcript when you ask for it |
-| Host access to `udemy.com`, `coursera.org`, `youtube.com` | Read transcripts on those sites |
-| Host access to `*.googlevideo.com` | Download YouTube video and audio using the signed-in browser session without repeated per-server permission requests |
-| Host access to `*.udemycdn.com` | Download Udemy video segments using the signed-in browser session without per-host permission prompts |
+| Host access to `https://*/*` | Approve HTTPS source/CDN access at installation so new video hosts do not require repeated runtime permission prompts |
 
-The extension does **not** request persistent access to all websites. It runs
-automatically on the three listed platforms. When you explicitly invoke it on
-another page, `activeTab` allows an attempt to read standard HTML5 captions there.
+The extension requests persistent access to all HTTPS websites at installation.
+Automatic content scripts remain limited to Udemy, Coursera and YouTube. The broader
+network grant supports video/CDN requests for downloads you initiate and caption extraction
+you request on other pages. It does not enable automatic scripts on every website.
 
 ---
 

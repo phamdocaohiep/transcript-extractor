@@ -36,6 +36,9 @@ export type DownloadPlan =
   | AdaptivePlan;
 export async function checkHosts(urls: string[], trace?: Trace) {
   const origins = [...new Set(urls.map(url => `${new URL(hlsUrl(url)).origin}/*`))];
+  // Network access is approved at installation, including CDN hosts not known
+  // beforehand. Query Chrome so deliberately withheld access is still respected.
+  if (!origins.length || (await chrome.permissions.contains({ origins: ['https://*/*'] }))) return;
   const missing: string[] = [];
   const grants = new Map<string, boolean>();
   for (const origin of origins) {

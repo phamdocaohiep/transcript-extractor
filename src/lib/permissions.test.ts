@@ -35,9 +35,11 @@ it('uses the granted CDN family without asking again for each new video server',
       checkHosts([`https://${server}.googlevideo.com/videoplayback`])
     ).resolves.toBeUndefined();
   }
-  expect(contains).toHaveBeenCalledTimes(3);
+  expect(contains).toHaveBeenCalledTimes(6);
   expect(
-    contains.mock.calls.every(([query]) => query.origins[0] === 'https://*.googlevideo.com/*')
+    contains.mock.calls.every(([query]) =>
+      ['https://*/*', 'https://*.googlevideo.com/*'].includes(query.origins[0])
+    )
   ).toBe(true);
 });
 it('retains a previously granted individual server without requesting broader access', async () => {
@@ -64,5 +66,22 @@ it('reuses declared Udemy CDN access for different video hosts without a permiss
   await expect(
     checkHosts(['https://hls-c.udemycdn.com/video.m3u8', 'https://hls.udemycdn.com/part.ts'])
   ).resolves.toBeUndefined();
-  expect(contains).toHaveBeenCalledOnce();
+  expect(contains).toHaveBeenCalledTimes(2);
+});
+it('uses installation access for new HTTPS CDN hosts without per-host prompts', async () => {
+  const contains = vi.fn(
+    async ({ origins }: { origins: string[] }) => origins[0] === 'https://*/*'
+  );
+  vi.stubGlobal('chrome', { permissions: { contains } });
+  await expect(
+    checkHosts(['https://new-cdn.example/video.mp4', 'https://other-cdn.example/part.ts'])
+  ).resolves.toBeUndefined();
+  expect(contains).toHaveBeenCalledExactlyOnceWith({ origins: ['https://*/*'] });
+});
+it('continues to reject insecure or credential-bearing URLs even with installation access', async () => {
+  vi.stubGlobal('chrome', { permissions: { contains: vi.fn(async () => true) } });
+  await expect(checkHosts(['http://cdn.example/video.mp4'])).rejects.toThrow('HTTPS');
+  await expect(checkHosts(['https://user:secret@cdn.example/video.mp4'])).rejects.toThrow(
+    'credentials'
+  );
 });
