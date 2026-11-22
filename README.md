@@ -100,6 +100,10 @@ All of this is derived from the transcript by selection and statistics, so nothi
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
 The destination folder is remembered in the Chrome profile. Chrome may ask to renew folder access.
+New video and transcript files are written directly into that folder, without creating a source subfolder.
+The small folder icon beside a completed result opens Chrome's file browser at its saved destination;
+it does not change Settings or launch Finder. Saved locations are retained for new downloads even if
+you later choose another destination. Older downloads without a recorded location do not show this icon.
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.
@@ -118,7 +122,8 @@ entry and **Videos** disclosure for item selection and detailed statuses.
 After a single video is saved, its format picker, Download button and transfer counters are replaced by
 one compact result: video and transcript downloaded, or video downloaded without a transcript.
 Single-video failures show a small **Retry** beside the error, without a list-retry block or separate
-failure summary. Retry explicitly reloads and reconnects that source tab, then resets it to Ready.
+failure summary. Retry reads the source again, then resets it to Ready. It reloads the page only
+when the automatic-reload checkbox in Settings is enabled; an unchecked checkbox never permits a Retry reload.
 Press **Download** to start again; Retry itself never starts a transfer, even with automatic mode enabled.
 Automatic reload remains off unless enabled separately.
 The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected

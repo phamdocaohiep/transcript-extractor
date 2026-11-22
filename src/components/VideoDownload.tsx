@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
-import { Trash2, X, Download } from 'lucide-react';
+import { Trash2, X, Download, FolderOpen } from 'lucide-react';
 import { Preview } from './Preview';
 import {
   HostAccessNeeded,
@@ -89,6 +89,32 @@ export function VideoDownload({
   });
   const [loaded, setLoaded] = useState(false);
   const [items, setItems] = useState<DownloadItem[]>([]);
+  const [locations, setLocations] = useState<Record<string, FileSystemDirectoryHandle>>({});
+  useEffect(() => {
+    let disposed = false;
+    void Promise.all(
+      items
+        .filter(item => item.url && (item.saved?.video || item.saved?.transcript))
+        .map(
+          async item =>
+            [item.id, await loadDirectory(`location:${completionKey(item.url!)}`)] as const
+        )
+    )
+      .then(values => {
+        if (!disposed)
+          setLocations(
+            Object.fromEntries(
+              values.filter(
+                (value): value is readonly [string, FileSystemDirectoryHandle] => !!value[1]
+              )
+            )
+          );
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [items]);
   const [listSize, setListSize] = useState<{
     loaded: number;
     expected: number;
@@ -706,7 +732,6 @@ export function VideoDownload({
     const abort = new AbortController();
     controller.current = abort;
     try {
-      // This reload is explicitly requested by Retry, independently of auto reload.
       if (resetSelection.current) {
         const value = { ...preferences, format: undefined, maxHeight: undefined };
         await savePreferences(value);
@@ -715,8 +740,10 @@ export function VideoDownload({
         removed.current.clear();
         resetSelection.current = false;
       }
-      await chrome.tabs.reload(tabId);
-      const current = await waitForContext(abort.signal);
+      if (settings.current.reload) await chrome.tabs.reload(tabId);
+      const current = settings.current.reload
+        ? await waitForContext(abort.signal)
+        : await pageContext();
       setContext(current);
       setSource(current.sources[0] || '');
       loadedList.current = '';
@@ -1222,22 +1249,50 @@ export function VideoDownload({
           </span>
         )}
         {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
-          <button
-            className="te-small-button"
-            type="button"
-            aria-label={`Remove downloaded item: ${item.title}`}
-            title="Remove from list; keep saved files"
-            disabled={busy}
-            onClick={() => {
-              removed.current.add(`${groupKey(context!.url)}:${item.id}`);
-              void persistItems(
-                items.filter(value => value.id !== item.id),
-                context!.url
-              ).catch(report);
-            }}
-          >
-            <Trash2 size={14} />
-          </button>
+          <>
+            {locations[item.id] && (
+              <button
+                type="button"
+                className="te-text-button te-location-button"
+                aria-label="Browse saved location"
+                title="Browse saved location"
+                onClick={() => {
+                  const picker = (
+                    window as unknown as {
+                      showOpenFilePicker(options: {
+                        startIn: FileSystemDirectoryHandle;
+                      }): Promise<unknown>;
+                    }
+                  ).showOpenFilePicker;
+                  if (!picker) {
+                    setError('File browsing is unavailable in this browser.');
+                    return;
+                  }
+                  void picker.call(window, { startIn: locations[item.id] }).catch(err => {
+                    if (!(err instanceof DOMException && err.name === 'AbortError')) report(err);
+                  });
+                }}
+              >
+                <FolderOpen size={14} />
+              </button>
+            )}
+            <button
+              className="te-small-button"
+              type="button"
+              aria-label={`Remove downloaded item: ${item.title}`}
+              title="Remove from list; keep saved files"
+              disabled={busy}
+              onClick={() => {
+                removed.current.add(`${groupKey(context!.url)}:${item.id}`);
+                void persistItems(
+                  items.filter(value => value.id !== item.id),
+                  context!.url
+                ).catch(report);
+              }}
+            >
+              <Trash2 size={14} />
+            </button>
+          </>
         )}
         {item.error && (!compact || !saved.video) && (
           <span className="te-muted text-sm">

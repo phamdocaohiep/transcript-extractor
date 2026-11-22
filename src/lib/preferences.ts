@@ -36,12 +36,15 @@ async function openStore(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveDirectory(value: FileSystemDirectoryHandle): Promise<void> {
+export async function saveDirectory(
+  value: FileSystemDirectoryHandle,
+  key = 'directory'
+): Promise<void> {
   const db = await openStore();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction('values', 'readwrite');
-      tx.objectStore('values').put(value, 'directory');
+      tx.objectStore('values').put(value, key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
@@ -51,11 +54,11 @@ export async function saveDirectory(value: FileSystemDirectoryHandle): Promise<v
   }
 }
 
-export async function loadDirectory(): Promise<FileSystemDirectoryHandle | null> {
+export async function loadDirectory(key = 'directory'): Promise<FileSystemDirectoryHandle | null> {
   const db = await openStore();
   try {
     return await new Promise((resolve, reject) => {
-      const request = db.transaction('values').objectStore('values').get('directory');
+      const request = db.transaction('values').objectStore('values').get(key);
       request.onsuccess = () => resolve(request.result ?? null);
       request.onerror = () => reject(request.error);
     });

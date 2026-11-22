@@ -33,6 +33,14 @@ it('restores the selected folder handle from a reopened database', async () => {
   await saveDirectory(handle);
   expect(await loadDirectory()).toEqual(handle);
 });
+it('keeps saved file locations separate from later destination changes', async () => {
+  const first = { kind: 'directory', name: 'First' } as FileSystemDirectoryHandle;
+  const second = { kind: 'directory', name: 'Second' } as FileSystemDirectoryHandle;
+  await saveDirectory(first, 'location:example');
+  await saveDirectory(second);
+  expect(await loadDirectory('location:example')).toEqual(first);
+  expect(await loadDirectory()).toEqual(second);
+});
 it('persists quality preferences and ignores invalid values from stored settings', async () => {
   await savePreferences({
     video: true,

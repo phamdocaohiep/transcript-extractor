@@ -8,6 +8,7 @@ import { flushDiagnostics, exportDiagnostics } from '../lib/diagnostics';
 import {
   loadPreferences,
   savePreferences,
+  saveDirectory,
   loadDirectory,
   hasDirectoryAccess,
 } from '../lib/preferences';
@@ -165,7 +166,11 @@ beforeEach(() => {
   };
   vi.stubGlobal(
     'showDirectoryPicker',
-    vi.fn(async () => ({ name: 'Lessons', getDirectoryHandle: vi.fn(async () => folder) }))
+    vi.fn(async () => ({
+      name: 'Lessons',
+      ...folder,
+      getDirectoryHandle: vi.fn(async () => folder),
+    }))
   );
   container = document.createElement('div');
   document.body.append(container);
@@ -391,6 +396,32 @@ it('keeps progress, combining details and cancellation inside the source card', 
   expect(card.querySelector('.te-preview-status')?.textContent).toBe('Completed');
   expect(card.querySelector('progress')).toBeNull();
 });
+it('writes directly into the configured folder and browses its saved location without changing settings', async () => {
+  const locations = new Map<string, FileSystemDirectoryHandle>();
+  vi.mocked(saveDirectory).mockImplementation(async (handle, key = 'directory') => {
+    locations.set(key, handle);
+  });
+  vi.mocked(loadDirectory).mockImplementation(
+    async (key = 'directory') => locations.get(key) || null
+  );
+  const picker = vi.fn(async () => []);
+  vi.stubGlobal('showOpenFilePicker', picker);
+  await render();
+  await click('Choose destination folder');
+  const destination = locations.get('directory')!;
+  await click('Download');
+  expect(destination.getDirectoryHandle).not.toHaveBeenCalled();
+  expect(folder.getFileHandle).toHaveBeenCalled();
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Browse saved location"]'
+  )!;
+  expect(button).not.toBeNull();
+  await act(async () => button.click());
+  expect(picker).toHaveBeenCalledWith({ startIn: destination });
+  expect(locations.get('directory')).toBe(destination);
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  vi.mocked(saveDirectory).mockImplementation(async () => undefined);
+});
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
   await click('Choose destination folder');
@@ -422,11 +453,11 @@ it('does not reload a stale source by default', async () => {
   expect(container.querySelectorAll('button.te-retry-button')).toHaveLength(1);
   expect(container.querySelector('.te-download-toolbar')).toBeNull();
   await click('Retry');
-  expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
   expect(container.querySelector('.te-download-title')?.textContent).toBe('First lecture');
   expect(folder.getFileHandle).not.toHaveBeenCalled();
 });
-it('offers one small retry beside a failed single item and reloads only after that click', async () => {
+it('resets a failed single item without reloading or downloading after Retry', async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   let fail = true;
   vi.mocked(fetch).mockImplementation(async (...args) => {
@@ -446,6 +477,27 @@ it('offers one small retry beside a failed single item and reloads only after th
   expect(container.textContent).not.toContain('Retry video list');
   expect(container.textContent).not.toContain('The full list is not loaded');
   expect(container.textContent).not.toContain('Finished: 0 saved');
+  await click('Retry');
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+  expect(Object.keys(writes)).toHaveLength(0);
+  await click('Download');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
+});
+it('reloads on Retry only when configured and still waits for Download', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    reload: true,
+  });
+  protectedVideo = true;
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Failed');
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  protectedVideo = false;
   await click('Retry');
   expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
   expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
@@ -943,6 +995,7 @@ it('shows a configuration error when Download is clicked without a saved folder'
 it('requests write permission from Download and continues immediately when allowed', async () => {
   vi.mocked(loadDirectory).mockResolvedValue({
     name: 'Lessons',
+    ...folder,
     getDirectoryHandle: vi.fn(async () => folder),
   } as unknown as FileSystemDirectoryHandle);
   vi.mocked(hasDirectoryAccess).mockImplementation(async (_folder, request) => Boolean(request));
@@ -973,6 +1026,7 @@ it('loads all course items automatically and selects every item initially', asyn
 it('keeps Download available after permission is declined so the user can retry', async () => {
   vi.mocked(loadDirectory).mockResolvedValue({
     name: 'Lessons',
+    ...folder,
     getDirectoryHandle: vi.fn(async () => folder),
   } as unknown as FileSystemDirectoryHandle);
   let prompts = 0;
@@ -1145,6 +1199,7 @@ it('shows the permission dialog during automatic downloading while Settings is o
   vi.mocked(loadPreferences).mockResolvedValue({ video: true, transcript: true, automatic: true });
   vi.mocked(loadDirectory).mockResolvedValue({
     name: 'Lessons',
+    ...folder,
     getDirectoryHandle: vi.fn(async () => folder),
   } as unknown as FileSystemDirectoryHandle);
   let granted = false;
@@ -1249,6 +1304,7 @@ it.each([{}, { format: 'webm' as const }, { maxHeight: 144 }])(
     const getDirectoryHandle = vi.fn(async () => folder);
     vi.mocked(loadDirectory).mockResolvedValue({
       name: 'Previous folder',
+      ...folder,
       getDirectoryHandle,
     } as unknown as FileSystemDirectoryHandle);
     const adaptive = {
@@ -1292,7 +1348,7 @@ it.each([{}, { format: 'webm' as const }, { maxHeight: 144 }])(
       expect(container.textContent).toContain('Retry will use Auto quality');
       expect(container.textContent).not.toContain('Retry video list');
       await click('Retry');
-      expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+      expect(chrome.tabs.reload).not.toHaveBeenCalled();
       expect(savePreferences).toHaveBeenCalledWith({
         video: true,
         transcript: true,
@@ -1313,7 +1369,7 @@ it.each([{}, { format: 'webm' as const }, { maxHeight: 144 }])(
       expect.any(Function),
       expect.any(Function)
     );
-    expect(getDirectoryHandle).toHaveBeenCalledWith('www.youtube.com_example', { create: true });
+    expect(getDirectoryHandle).not.toHaveBeenCalled();
     expect(container.textContent).toContain('1 video & transcript downloaded');
     expect(stored[completionKey(currentUrl)]).toEqual(expect.objectContaining({ video: true }));
     expect(
@@ -1473,6 +1529,7 @@ function configureParallel() {
   });
   vi.mocked(loadDirectory).mockResolvedValue({
     name: 'Shared',
+    ...folder,
     getDirectoryHandle: vi.fn(async () => folder),
   } as unknown as FileSystemDirectoryHandle);
   Object.assign(chrome, { scripting: { executeScript: vi.fn(async () => []) } });

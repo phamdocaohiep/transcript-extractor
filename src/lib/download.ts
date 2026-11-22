@@ -20,6 +20,7 @@ import { groupKey } from './identity';
 import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
 import { classifyError, type Trace } from './diagnostics';
+import { saveDirectory } from './preferences';
 
 export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
   `download_completed:${lectureId(url, '')}${choice && (choice.format || choice.maxHeight) ? `:quality:${selectionKey(choice)}` : ''}`;
@@ -281,8 +282,7 @@ export async function saveDownload(
   if (preferences.video && (!plan || context.protected))
     throw new Error('No supported video is ready.');
   if (preferences.transcript && !transcript.trim()) throw new Error('No transcript is ready.');
-  const name = getFolderName(context.url);
-  const folder = await directory.getDirectoryHandle(name, { create: true });
+  const folder = directory;
   const base = `${safeVideoName(context.title)}-${crypto.randomUUID().slice(0, 8)}`;
   if (preferences.transcript) {
     const file = await folder.getFileHandle(`${base}.md`, { create: true });
@@ -367,13 +367,14 @@ export async function saveDownload(
       await writer?.abort().catch(() => undefined);
       await folder.removeEntry(filename).catch(() => undefined);
       if (preferences.transcript)
-        notice(`Transcript saved in ${directory.name}/${name}. Video was not completed.`);
+        notice(`Transcript saved in ${directory.name}. Video was not completed.`);
       throw error;
     }
   }
   notice(
-    `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} in ${directory.name}/${name}.`
+    `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} in ${directory.name}.`
   );
+  await saveDirectory(directory, `location:${completionKey(context.url)}`);
   const key = completionKey(context.url, preferences);
   const sharedKey = completionKey(context.url);
   await navigator.locks.request(`completion-${sharedKey}`, { mode: 'exclusive' }, async () => {
