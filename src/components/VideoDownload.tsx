@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
+import { PROTOCOL_VERSION } from '../lib/hls-discovery';
 import {
   HostAccessNeeded,
   prepareVideo,
@@ -82,6 +83,7 @@ export function VideoDownload({
     expected: number;
     unique: number;
   } | null>(null);
+  const [listFailed, setListFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -164,7 +166,7 @@ export function VideoDownload({
             'The lecture tab did not return video information. Reload it and reconnect.'
       );
     }
-    if (reply.data.protocolVersion !== 2)
+    if (reply.data.protocolVersion !== PROTOCOL_VERSION)
       throw new PageConnectionError(
         'The page is running an older extension script. Reconnecting after reload.'
       );
@@ -587,6 +589,7 @@ export function VideoDownload({
     setBusy(true);
     setError('');
     setNotice('Loading items…');
+    setListFailed(false);
     try {
       const response = await send('GET_DOWNLOAD_ITEMS');
       abort.signal.throwIfAborted();
@@ -655,18 +658,42 @@ export function VideoDownload({
         }
       }
       if (!next.length && /(^|\.)udemy\.com$/.test(new URL(context.url).hostname)) {
-        throw new Error(
-          'No videos were found in the course curriculum. Reload the course page and retry.'
+        setListFailed(true);
+        if (
+          !context.hasPlayer &&
+          !context.sources.length &&
+          !context.streams?.length &&
+          !context.adaptive
+        )
+          throw new Error('The video list is not ready. Open Course content and retry the list.');
+        setError(
+          'Only the current video is available. Retry the list to load the remaining videos.'
         );
       }
-      if (!next.length)
+      if (!next.length) {
+        const key = completionKey(context.url);
+        const previous = (await chrome.storage.local.get(key))[key] as
+          | { video?: boolean; transcript?: boolean }
+          | undefined;
+        const saved = {
+          video: previous?.video === true,
+          transcript: previous?.transcript === true,
+        };
+        const complete =
+          (!preferences.video || saved.video) && (!preferences.transcript || saved.transcript);
         next.push({
           id: lectureId(context.url, ''),
           title: context.title,
           url: context.url,
           selected: true,
-          status: 'pending',
+          saved,
+          status: complete
+            ? 'completed'
+            : saved.video && preferences.transcript && !saved.transcript
+              ? 'partial'
+              : 'pending',
         });
+      }
       await persistItems(next, context.url);
       const loadedCount = Number(response.data?.loadedItems) || next.length;
       const expectedCount = Number(response.data?.totalItems) || loadedCount;
@@ -677,6 +704,7 @@ export function VideoDownload({
         total: next.length,
       });
     } catch (err) {
+      setListFailed(true);
       listingTrace('run_finished', { result: 'failed', code: classifyError(err) });
       report(err);
     } finally {
@@ -1001,14 +1029,14 @@ export function VideoDownload({
             items
           </p>
         )}
-        {incomplete && (
+        {(incomplete || listFailed) && (
           <div className="flex flex-col gap-2">
             <p className="te-muted text-sm" role="status">
-              Some playlist entries have not loaded. You can download the selected items now or load
-              the remaining entries first.
+              The full list is not loaded. You can download the selected items now or retry the
+              list.
             </p>
             <button className="te-btn" disabled={busy} onClick={() => void loadItems()}>
-              Load remaining items
+              {listFailed ? 'Retry video list' : 'Load remaining items'}
             </button>
           </div>
         )}

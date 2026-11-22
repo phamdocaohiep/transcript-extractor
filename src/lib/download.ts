@@ -37,19 +37,22 @@ export type DownloadPlan =
 export async function checkHosts(urls: string[], trace?: Trace) {
   const origins = [...new Set(urls.map(url => `${new URL(hlsUrl(url)).origin}/*`))];
   const missing: string[] = [];
-  const family = 'https://*.googlevideo.com/*';
-  let familyGranted: boolean | undefined;
+  const grants = new Map<string, boolean>();
   for (const origin of origins) {
     const hostname = new URL(origin).hostname;
-    const isVideoHost = hostname === 'googlevideo.com' || hostname.endsWith('.googlevideo.com');
-    if (isVideoHost) {
-      familyGranted ??= await chrome.permissions.contains({ origins: [family] });
-      if (familyGranted) continue;
+    const domain = ['googlevideo.com', 'udemycdn.com'].find(
+      value => hostname === value || hostname.endsWith(`.${value}`)
+    );
+    const family = domain ? `https://*.${domain}/*` : undefined;
+    if (family) {
+      if (!grants.has(family))
+        grants.set(family, await chrome.permissions.contains({ origins: [family] }));
+      if (grants.get(family)) continue;
     }
     if (!(await chrome.permissions.contains({ origins: [origin] }))) {
       // YouTube can move either track to another CDN hostname during playback.
       // Ask once for its video-server family, while preserving existing grants.
-      const pattern = isVideoHost ? family : origin;
+      const pattern = family || origin;
       if (!missing.includes(pattern)) missing.push(pattern);
     }
   }

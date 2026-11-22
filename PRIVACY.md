@@ -86,6 +86,7 @@ rest of the extension is unaffected.
 | `clipboardWrite` | Copy a transcript when you ask for it |
 | Host access to `udemy.com`, `coursera.org`, `youtube.com` | Read transcripts on those sites |
 | Host access to `*.googlevideo.com` | Download YouTube video and audio using the signed-in browser session without repeated per-server permission requests |
+| Host access to `*.udemycdn.com` | Download Udemy video segments using the signed-in browser session without per-host permission prompts |
 
 The extension does **not** request persistent access to all websites. It runs
 automatically on the three listed platforms. When you explicitly invoke it on

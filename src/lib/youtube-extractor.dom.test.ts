@@ -210,6 +210,7 @@ it('loads delayed playlist rows and restores the original scroll position', asyn
   document.body.innerHTML = `<ytd-playlist-header-renderer><div id="stats">2 videos</div></ytd-playlist-header-renderer>
     <ytd-playlist-video-list-renderer><ytd-playlist-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-video-renderer></ytd-playlist-video-list-renderer>`;
   const panel = document.querySelector('ytd-playlist-video-list-renderer')!;
+  (panel as HTMLElement).style.overflowY = 'auto';
   Object.defineProperties(panel, { scrollHeight: { value: 1000 }, clientHeight: { value: 100 } });
   panel.scrollTop = 25;
   panel.addEventListener('scroll', () => setTimeout(() => {
@@ -219,6 +220,30 @@ it('loads delayed playlist rows and restores the original scroll position', asyn
   await vi.runAllTimersAsync(); await loading;
   expect(YouTubeExtractor.extractPlaylist()?.videos).toHaveLength(2);
   expect(panel.scrollTop).toBe(25);
+});
+it('does not scroll the page when the playlist has no internal scroll container', async () => {
+  window.history.replaceState({}, '', '/playlist?list=PL123');
+  document.body.innerHTML = `<ytd-playlist-header-renderer><div id="stats">2 videos</div></ytd-playlist-header-renderer>
+    <ytd-playlist-video-list-renderer><ytd-playlist-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-video-renderer></ytd-playlist-video-list-renderer>`;
+  document.documentElement.scrollTop = 80;
+  const scroll = vi.fn();
+  document.addEventListener('scroll', scroll);
+  try {
+    await YouTubeExtractor.loadAllItems();
+    expect(document.documentElement.scrollTop).toBe(80);
+    expect(scroll).not.toHaveBeenCalled();
+    expect(YouTubeExtractor.extractPlaylist()?.videos).toHaveLength(1);
+  } finally { document.removeEventListener('scroll', scroll); }
+});
+it('reads an already-loaded playlist without scrolling its internal container', async () => {
+  window.history.replaceState({}, '', '/watch?v=first&list=PL123');
+  document.body.innerHTML = `<ytd-playlist-panel-renderer style="overflow-y:auto"><span class="index-message">1 / 1</span>
+    <ytd-playlist-panel-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-panel-video-renderer></ytd-playlist-panel-renderer>`;
+  const panel = document.querySelector('ytd-playlist-panel-renderer')!;
+  panel.scrollTop = 15;
+  const scroll = vi.fn(); panel.addEventListener('scroll', scroll);
+  await YouTubeExtractor.loadAllItems();
+  expect(panel.scrollTop).toBe(15); expect(scroll).not.toHaveBeenCalled();
 });
 
 it('uses the playlist header rather than the channel name on a watch page', () => {

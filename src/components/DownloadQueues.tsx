@@ -11,10 +11,16 @@ function supports(url?: string) {
   if (!url) return false;
   try {
     const address = new URL(url);
-    return (
-      address.protocol === 'https:' &&
-      /(^|\.)(youtube\.com|udemy\.com|coursera\.org)$/.test(address.hostname)
-    );
+    if (address.protocol !== 'https:') return false;
+    if (/(^|\.)youtube\.com$/.test(address.hostname))
+      return (
+        (address.pathname === '/watch' && !!address.searchParams.get('v')) ||
+        (address.pathname === '/playlist' && !!address.searchParams.get('list')) ||
+        /^\/shorts\/[^/]+/.test(address.pathname)
+      );
+    if (/(^|\.)udemy\.com$/.test(address.hostname))
+      return /^\/course\/[^/]+\/learn(?:\/|$)/.test(address.pathname);
+    return /(^|\.)coursera\.org$/.test(address.hostname) && address.pathname.startsWith('/learn/');
   } catch {
     return false;
   }
@@ -59,20 +65,24 @@ export function DownloadQueues({
     const update = (follow = true) => {
       const current = ++revision;
       void chrome.tabs
-        .query({ active: true, currentWindow: true })
-        .then(([tab]) => {
-          if (disposed || current !== revision || tab?.id === undefined || !supports(tab.url))
-            return;
-          const id = tab.id;
-          setEntries(previous =>
-            previous.some(entry => entry.id === id)
-              ? previous
-              : [...previous, { id, title: tab.title || 'Untitled tab' }]
+        .query({ currentWindow: true })
+        .then(tabs => {
+          if (disposed || current !== revision) return;
+          const found = tabs.filter(tab => tab.id !== undefined && supports(tab.url));
+          setEntries(previous => [
+            ...previous,
+            ...found
+              .filter(tab => !previous.some(entry => entry.id === tab.id))
+              .map(tab => ({ id: tab.id!, title: tab.title || 'Untitled tab' })),
+          ]);
+          const active = found.find(tab => tab.active);
+          setSelected(previous =>
+            follow && active ? active.id : (previous ?? active?.id ?? found[0]?.id)
           );
-          setSelected(previous => (follow ? id : (previous ?? id)));
+          setMessage('');
         })
         .catch(() => {
-          if (!disposed) setMessage('Could not read the active tab. Reopen the panel to retry.');
+          if (!disposed) setMessage('Could not read open tabs. Switch to a video tab to retry.');
         });
     };
     const changed = (id: number, info: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => {
@@ -80,7 +90,7 @@ export function DownloadQueues({
         setEntries(previous =>
           previous.map(entry => (entry.id === id ? { ...entry, title: info.title! } : entry))
         );
-      if (tab.active && info.status === 'complete') update(false);
+      if (info.status === 'complete' || info.url) update(tab.active);
     };
     const removed = (id: number) => {
       revision++;
@@ -98,42 +108,24 @@ export function DownloadQueues({
     chrome.tabs.onActivated.addListener(activated);
     chrome.tabs.onUpdated.addListener(changed);
     chrome.tabs.onRemoved.addListener(removed);
+    const created = () => update(false);
+    chrome.tabs.onCreated.addListener(created);
     return () => {
       disposed = true;
       chrome.tabs.onActivated.removeListener(activated);
       chrome.tabs.onUpdated.removeListener(changed);
       chrome.tabs.onRemoved.removeListener(removed);
+      chrome.tabs.onCreated.removeListener(created);
     };
   }, []);
-
-  async function addOpenTabs() {
-    try {
-      const tabs = await chrome.tabs.query({ currentWindow: true });
-      const next = tabs
-        .filter(tab => tab.id !== undefined && supports(tab.url))
-        .map(tab => ({ id: tab.id!, title: tab.title || 'Untitled tab' }));
-      setEntries(previous => [
-        ...previous,
-        ...next.filter(tab => !previous.some(entry => entry.id === tab.id)),
-      ]);
-      setSelected(previous => previous ?? next[0]?.id);
-      setMessage(next.length ? '' : 'Open a YouTube or Udemy page to add a queue.');
-    } catch {
-      setMessage('Could not read open tabs. Try again.');
-    }
-  }
 
   return (
     <>
       <section className="te-glass p-5 flex flex-col gap-3" aria-label="Download queues">
         <h2 className="font-semibold">Download queues</h2>
         <p className="te-muted text-sm">
-          Each tab has its own queue. Downloads continue when you switch tabs. Keep this panel and
-          source tabs open.
+          Video tabs are detected automatically. Downloads continue when you switch tabs.
         </p>
-        <button className="te-btn" onClick={() => void addOpenTabs()}>
-          Add open tabs
-        </button>
         {message && <p role="status">{message}</p>}
         {!entries.length && <p>Open a YouTube or Udemy page to start downloading.</p>}
         <ul className="flex flex-col gap-2">
@@ -151,7 +143,7 @@ export function DownloadQueues({
             return (
               <li key={entry.id}>
                 <button
-                  className="te-btn w-full text-left"
+                  className="te-btn te-queue-button"
                   aria-current={selected === entry.id ? 'true' : undefined}
                   onClick={() => setSelected(entry.id)}
                 >

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Transcript Extractor",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "description": "Extract lecture transcripts from any video site and export them as notes, subtitles, spreadsheets or retrieval-ready chunks.",
   "permissions": [
     "activeTab",
@@ -16,7 +16,8 @@
     "https://*.udemy.com/*",
     "https://*.coursera.org/*",
     "https://*.youtube.com/*",
-    "https://*.googlevideo.com/*"
+    "https://*.googlevideo.com/*",
+    "https://*.udemycdn.com/*"
   ],
   "icons": {
     "16": "icons/icon16.png",

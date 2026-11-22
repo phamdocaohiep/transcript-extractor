@@ -1,5 +1,6 @@
 import type { StreamInfo } from './stream-discovery';
 import type { AdaptiveInfo } from './playback-session';
+export const PROTOCOL_VERSION = 3;
 
 export interface VideoDownloadContext {
   url: string;

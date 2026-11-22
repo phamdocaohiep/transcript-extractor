@@ -249,6 +249,24 @@ it('expands collapsed chapters before reading their items', async () => {
     vi.useRealTimers();
   }
 });
+it('waits for a delayed sidebar and expands role-based headers without opening resource menus', async () => {
+  vi.useFakeTimers();
+  try {
+    document.body.innerHTML = '';
+    setTimeout(() => {
+      document.body.innerHTML = `<div class="accordion-panel-module--panel"><div role="button" aria-expanded="false"><h3>Introduction</h3></div></div>`;
+      const header = document.querySelector('[role="button"]')!;
+      header.addEventListener('click', () => {
+        header.setAttribute('aria-expanded', 'true');
+        header.insertAdjacentHTML('afterend', '<div data-purpose="curriculum-item-101"><span data-purpose="item-title">Video</span><button aria-expanded="false">Resources</button></div>');
+      });
+    }, 250);
+    const loading = UdemyExtractor.loadAllItems(new AbortController().signal);
+    await vi.runAllTimersAsync(); await loading;
+    expect(UdemyExtractor.extractCourseStructure()?.sections[0].lectures).toHaveLength(1);
+    expect(document.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+  } finally { vi.useRealTimers(); }
+});
 
 it('reads visible cue text in the sidebar without toggling the open transcript closed', async () => {
   vi.useFakeTimers();

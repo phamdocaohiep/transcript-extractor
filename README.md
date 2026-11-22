@@ -131,7 +131,8 @@ Open a YouTube watch page or Short in the Chrome profile where you are signed in
 extension. The same Download action, destination folder, automatic mode and playlist selection are used.
 The **Download queues** list keeps an independent queue for each source tab. Switching between YouTube
 and Udemy tabs selects that tab's queue without cancelling downloads or permission pauses in other tabs.
-Use **Add open tabs** to register supported tabs in the current window, select a queue, and press **Download**;
+Supported video tabs in the current window are detected and registered automatically, including new background tabs.
+Select a queue and press **Download**;
 different queues can transfer concurrently. When automatic mode is enabled, registered video tabs are
 watched independently. A host grant is reused by other waiting queues. Only the selected queue shows its
 permission dialog, so a background queue does not interrupt another queue's controls.
@@ -139,7 +140,9 @@ Folder and format settings are shared; they cannot be changed during active tran
 are stored separately by source tab, with existing saved-artifact progress retained. Closing a source tab
 stops only its queue. Keep the extension panel open during transfers; closing or reloading it stops its workers.
 Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
-The extension scrolls the playlist to load lazy rows, restores its scroll position, and compares the loaded
+The extension reads existing playlist rows first. If more rows are needed and the playlist has an internal
+overflow container, only that container is scrolled and its position restored. The page viewport is never
+scrolled. Without an internal scroller, the loaded subset remains available with a warning. It compares the loaded
 count with YouTube's declared count when available. Incomplete lists show a warning and **Load remaining items**
 while still allowing the loaded selections to download;
 duplicates are counted as unique downloads and unavailable entries remain visible as skipped items.
@@ -179,7 +182,8 @@ requests/results, CDN origin patterns, response codes, retries and saved-file st
 tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
 first when the 1,000-entry limit is reached, preserving permission and result events where possible.
 
-YouTube CDN access for `https://*.googlevideo.com/*` is declared with the extension's required host permissions.
+YouTube CDN access for `https://*.googlevideo.com/*` and Udemy CDN access for `https://*.udemycdn.com/*`
+are declared with the extension's required host permissions.
 Chrome may ask for approval when installing or updating this permission; downloads reuse the family grant
 without asking for each video or server. If site access is withheld, the extension requests it before continuing.
 Existing grants are checked through Chrome;
@@ -433,7 +437,7 @@ Everything runs on your machine, and the build enforces it:
 - No library uploads or analytics; source-platform caption requests may occur during extraction
 - No telemetry, analytics, crash reporting or remote configuration
 - No account, ever
-- Required host permissions cover the three supported platforms and YouTube's Googlevideo CDN; **no all-URLs permission**, and
+- Required host permissions cover the three supported platforms and the Googlevideo/Udemy CDNs; **no all-URLs permission**, and
   `check:store` fails the build if one appears
 - CSP is `script-src 'self'` — no `wasm-unsafe-eval`, because nothing evaluates generated code
 

@@ -62,14 +62,18 @@ export class YouTubeExtractor {
       panel = this.findPlaylistPanel();
     }
     if (!panel) return;
-    let scroller: Element = panel;
-    while (scroller.parentElement && scroller.scrollHeight <= scroller.clientHeight)
-      scroller = scroller.parentElement;
-    if (scroller.scrollHeight <= scroller.clientHeight) scroller = document.scrollingElement || document.documentElement;
-    const original = scroller.scrollTop;
     const rows = () => panel.querySelectorAll('ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer').length;
     const expected = this.getExpectedCount();
     if (expected && rows() >= expected) return;
+    // Never use the page viewport to load rows. Only an actual overflow container
+    // belonging to the playlist may be scrolled; otherwise retain the loaded list.
+    const boundary = panel.closest('ytd-playlist-panel-renderer, ytd-playlist-video-list-renderer') || panel;
+    const candidates = [panel, ...panel.querySelectorAll('#items, #container, #playlist-items, .playlist-items')];
+    for (let parent = panel.parentElement; parent && boundary.contains(parent); parent = parent.parentElement) candidates.push(parent);
+    const scroller = candidates.find(element => element !== document.body && element !== document.documentElement &&
+      element.scrollHeight > element.clientHeight && /^(auto|scroll)$/.test(getComputedStyle(element).overflowY));
+    if (!scroller) return;
+    const original = scroller.scrollTop;
     let previous = rows();
     let stable = 0;
     const deadline = Date.now() + 20_000;
@@ -77,11 +81,12 @@ export class YouTubeExtractor {
       while (Date.now() < deadline && (stable < 5 || (rows() < (this.getExpectedCount() || 0) && stable < 15))) {
         signal?.throwIfAborted();
         scroller.scrollTop = scroller.scrollHeight;
-        scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        scroller.dispatchEvent(new Event('scroll'));
         await this.pause(signal);
         const count = rows();
         stable = count === previous ? stable + 1 : 0;
         previous = count;
+        if (expected && count >= expected) break;
       }
     } finally { scroller.scrollTop = original; }
   }

@@ -54,6 +54,8 @@ let root: Root;
 let container: HTMLDivElement;
 let active: number;
 let activated: () => void;
+let created: () => void;
+let updated: (id: number, info: { status: 'complete' }, tab: { active: boolean }) => void;
 let removed: (id: number) => void;
 let tabs: Array<{ id: number; url: string; title: string }>;
 let onBusy: ReturnType<typeof vi.fn<(busy: boolean) => void>>;
@@ -70,14 +72,13 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('chrome', {
     tabs: {
-      query: vi.fn(async (query: { active?: boolean }) =>
-        query.active ? tabs.filter(tab => tab.id === active) : tabs
-      ),
+      query: vi.fn(async () => tabs.map(tab => ({ ...tab, active: tab.id === active }))),
       onActivated: {
         addListener: vi.fn(listener => (activated = listener)),
         removeListener: vi.fn(),
       },
-      onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      onUpdated: { addListener: vi.fn(listener => (updated = listener)), removeListener: vi.fn() },
+      onCreated: { addListener: vi.fn(listener => (created = listener)), removeListener: vi.fn() },
       onRemoved: { addListener: vi.fn(listener => (removed = listener)), removeListener: vi.fn() },
     },
   });
@@ -136,8 +137,9 @@ it('keeps a paused source mounted while another YouTube tab and an Udemy tab sta
 
 it('adds supported open tabs once and stops only the worker whose source tab closes', async () => {
   await render();
-  await click('Add open tabs');
-  await click('Add open tabs');
+  await select(1);
+  await select(1);
+  expect(container.textContent).not.toContain('Add open tabs');
   expect([...mounted]).toEqual([1, 2, 3]);
   await click('Start 1');
   await click('Start 2');
@@ -152,8 +154,18 @@ it('does not discard queues when switching to an unsupported tab', async () => {
   await render();
   await click('Start 1');
   await select(4);
-  expect([...mounted]).toEqual([1]);
+  expect([...mounted]).toEqual([1, 2, 3]);
   expect(stopped).toEqual([]);
+  expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
+});
+it('automatically registers a new background video tab after its URL is ready', async () => {
+  await render();
+  tabs.push({ id: 5, url: 'about:blank', title: 'Loading' });
+  await act(async () => created());
+  expect(mounted.has(5)).toBe(false);
+  tabs[4] = { id: 5, url: 'https://www.youtube.com/watch?v=new', title: 'New video' };
+  await act(async () => updated(5, { status: 'complete' }, { active: false }));
+  expect(mounted.has(5)).toBe(true);
   expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
 });
 it('keeps workers running when the main view is hidden for search or switched to settings', async () => {

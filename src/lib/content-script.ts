@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from './hls-discovery';
 import { createHlsDiscovery } from './hls-discovery';
 import { log } from './log';
 // Content Script for Transcript Extractor Extension - v3.0.0
@@ -163,7 +164,7 @@ class ContentScript {
           const controller = new AbortController();
           this.listController = controller;
           try {
-            if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.expandAllSections();
+            if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.loadAllItems(controller.signal);
             if (YouTubeExtractor.isPlaylistPage()) await YouTubeExtractor.loadAllItems(controller.signal);
             controller.signal.throwIfAborted();
             const structure = await this.extractCourseStructure();
@@ -262,7 +263,7 @@ class ContentScript {
               .find(item => lectureId(item.url, '') === lectureId(window.location.href, ''))
             : undefined;
           sendResponse({ success: true, data: {
-            protocolVersion: 2,
+            protocolVersion: PROTOCOL_VERSION,
             url: window.location.href,
             title: this.getVideoInfo()?.title || document.title,
             sources: this.hlsSources(),

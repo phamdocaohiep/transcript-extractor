@@ -56,3 +56,13 @@ it('does not treat a similarly named unrelated host as part of the CDN family', 
     origins: ['https://notgooglevideo.com/*'],
   });
 });
+it('reuses declared Udemy CDN access for different video hosts without a permission request', async () => {
+  const contains = vi.fn(
+    async ({ origins }: { origins: string[] }) => origins[0] === 'https://*.udemycdn.com/*'
+  );
+  vi.stubGlobal('chrome', { permissions: { contains } });
+  await expect(
+    checkHosts(['https://hls-c.udemycdn.com/video.m3u8', 'https://hls.udemycdn.com/part.ts'])
+  ).resolves.toBeUndefined();
+  expect(contains).toHaveBeenCalledOnce();
+});

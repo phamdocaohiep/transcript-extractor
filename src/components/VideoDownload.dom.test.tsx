@@ -125,7 +125,7 @@ beforeEach(() => {
         return {
           success: true,
           data: {
-            protocolVersion: 2,
+            protocolVersion: 3,
             url: currentUrl,
             title: 'First lecture',
             sources: hasSources && !textPages.has(currentUrl) ? [videoUrl] : [],
@@ -672,11 +672,34 @@ it('shows the course title and chapter headings and selects videos rather than q
   expect(container.textContent).toContain('Select all (2)');
 });
 
-it('does not invent an item from the current page when the curriculum is missing', async () => {
+it('allows the current video and offers a list retry when the curriculum is not ready', async () => {
   listing = [];
   await render();
-  expect(container.textContent).toContain('No videos were found in the course curriculum');
+  expect(container.textContent).toContain('Only the current video is available');
+  expect(container.textContent).toContain('Retry video list');
+  expect(container.querySelectorAll('li input')).toHaveLength(1);
+  await click('Choose destination folder');
+  await click('Download');
+  expect(container.textContent).toContain('1/1 videos saved');
+});
+it('offers a list retry without inventing a video when neither curriculum nor player is ready', async () => {
+  listing = [];
+  hasPlayer = false;
+  hasSources = false;
+  await render();
+  expect(container.textContent).toContain('The video list is not ready');
+  expect(container.textContent).toContain('Retry video list');
   expect(container.querySelectorAll('li input')).toHaveLength(0);
+});
+it('restores saved progress for the current video while waiting for the full curriculum', async () => {
+  listing = [];
+  stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1'] = {
+    video: true,
+    transcript: true,
+  };
+  await render();
+  expect(container.textContent).toContain('1/1 videos saved');
+  expect(container.textContent).toContain('1/1 transcripts saved');
 });
 
 it('saves video and continues the queue even when transcript extraction fails', async () => {
@@ -1024,20 +1047,24 @@ it('restores already-saved artifacts even when the selected formats use a differ
   expect(button.disabled).toBe(true);
 });
 
-it('reloads stale page scripts automatically after an extension update', async () => {
-  vi.mocked(chrome.tabs.sendMessage).mockImplementationOnce(async () => ({
-    success: true,
-    data: {
-      url: currentUrl,
-      title: 'Old page',
-      sources: [],
-      hasPlayer: false,
-    },
-  }));
-  await render();
-  expect(chrome.tabs.reload).toHaveBeenCalledOnce();
-  expect(container.textContent).toContain('Select all (1)');
-});
+it.each([undefined, 2])(
+  'reloads stale page scripts with protocol %s after an extension update',
+  async protocolVersion => {
+    vi.mocked(chrome.tabs.sendMessage).mockImplementationOnce(async () => ({
+      success: true,
+      data: {
+        url: currentUrl,
+        title: 'Old page',
+        protocolVersion,
+        sources: [],
+        hasPlayer: false,
+      },
+    }));
+    await render();
+    expect(chrome.tabs.reload).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('Select all (1)');
+  }
+);
 
 function configureParallel() {
   const addresses: Record<number, string> = {
@@ -1067,7 +1094,7 @@ function configureParallel() {
       return {
         success: true,
         data: {
-          protocolVersion: 2,
+          protocolVersion: 3,
           url: addresses[id],
           title: `Video ${id}`,
           sources: [`https://r${id}.googlevideo.com/index.m3u8`],
