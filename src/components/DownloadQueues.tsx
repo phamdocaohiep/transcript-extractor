@@ -130,13 +130,25 @@ export function DownloadQueues({
     };
   }, []);
 
+  function closeQueue(id: number) {
+    dismissed.current.set(id, addresses.current.get(id) || '');
+    const remaining = entries.filter(value => value.id !== id);
+    setEntries(remaining);
+    setSelected(previous => (previous === id ? remaining[0]?.id : previous));
+    setStates(previous => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+  }
+
   return (
     <>
-      <section className="te-glass p-5 flex flex-col gap-3" aria-label="Download queues">
-        <h2 className="font-semibold">Download queues</h2>
-        <p className="te-muted text-sm">
-          Video tabs are detected automatically. Downloads continue when you switch tabs.
-        </p>
+      <section
+        className="te-queue-switcher"
+        aria-label="Download queues"
+        hidden={entries.length === 1}
+      >
         {message && <p role="status">{message}</p>}
         {!entries.length && <p>Open a YouTube or Udemy page to start downloading.</p>}
         <ul className="flex flex-col gap-2">
@@ -169,17 +181,7 @@ export function DownloadQueues({
                   type="button"
                   aria-label={`Close queue: ${state?.title || entry.title}`}
                   title="Close queue; keep source tab and saved files"
-                  onClick={() => {
-                    dismissed.current.set(entry.id, addresses.current.get(entry.id) || '');
-                    const remaining = entries.filter(value => value.id !== entry.id);
-                    setEntries(remaining);
-                    setSelected(previous => (previous === entry.id ? remaining[0]?.id : previous));
-                    setStates(previous => {
-                      const next = { ...previous };
-                      delete next[entry.id];
-                      return next;
-                    });
-                  }}
+                  onClick={() => closeQueue(entry.id)}
                 >
                   <X size={16} />
                 </button>
@@ -201,6 +203,7 @@ export function DownloadQueues({
               screen={screen}
               active={visible && selected === entry.id}
               settingsLocked={busy}
+              onClose={() => closeQueue(entry.id)}
               onStateChange={receive}
             />
           )}

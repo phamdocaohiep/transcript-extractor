@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
-import { Trash2 } from 'lucide-react';
+import { Trash2, X, Download } from 'lucide-react';
 import { Preview } from './Preview';
 import {
   HostAccessNeeded,
   prepareVideo,
   saveDownload,
   completionKey,
-  getFolderName,
   inspectVideo,
   type Rendition,
 } from '../lib/download';
@@ -61,6 +60,7 @@ export function VideoDownload({
   active = true,
   settingsLocked = false,
   onStateChange,
+  onClose,
 }: {
   sourceTabId?: number;
   screen?: 'main' | 'settings';
@@ -68,6 +68,7 @@ export function VideoDownload({
   active?: boolean;
   settingsLocked?: boolean;
   onStateChange?: (tabId: number, state: QueueState) => void;
+  onClose?: () => void;
 } = {}) {
   const tabId = sourceTabId ?? Number(new URLSearchParams(location.search).get('tab'));
 
@@ -1086,106 +1087,122 @@ export function VideoDownload({
       <section
         hidden={screen !== 'main'}
         style={{ display: screen === 'main' ? undefined : 'none' }}
-        className="te-glass p-5 flex flex-col gap-3"
+        className="te-glass te-download-card"
       >
-        <h2 className="font-semibold">{title || context?.title || 'Connect to a lecture'}</h2>
-        {context && !items.length && (
-          <Preview url={context.url} thumbnail={context.thumbnail} title={context.title} />
+        {onClose && (
+          <button
+            type="button"
+            className="te-small-button te-card-close"
+            aria-label="Close queue"
+            title="Close queue"
+            onClick={onClose}
+          >
+            <X size={16} />
+          </button>
         )}
-        {preferences.video && (
-          <div className="te-quality-controls">
-            <label>
-              Video format
-              <select
-                className="te-select"
-                aria-label="Video format"
-                value={preferences.format || 'auto'}
-                disabled={busy || settingsLocked}
-                onChange={event =>
-                  void changePreferences({
-                    ...preferences,
-                    format:
-                      event.target.value === 'auto'
-                        ? undefined
-                        : (event.target.value as 'mp4' | 'webm'),
-                  })
-                }
-              >
-                <option value="auto">Auto</option>
-                {[
-                  ...new Set([
-                    ...renditions.map(item => item.format),
-                    ...(preferences.format ? [preferences.format] : []),
-                  ]),
-                ].map(format => (
-                  <option key={format} value={format}>
-                    {format.toUpperCase()}
-                    {renditions.length && !renditions.some(item => item.format === format)
-                      ? ' (not available here)'
-                      : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Resolution
-              <select
-                className="te-select"
-                aria-label="Resolution"
-                value={preferences.maxHeight || 0}
-                disabled={busy || settingsLocked}
-                onChange={event =>
-                  void changePreferences({
-                    ...preferences,
-                    maxHeight: Number(event.target.value) || undefined,
-                  })
-                }
-              >
-                <option value="0">Auto / source quality</option>
-                {[
-                  ...new Set([
-                    ...renditions
-                      .filter(item => !preferences.format || item.format === preferences.format)
-                      .map(item => item.height),
-                    preferences.maxHeight || 0,
-                  ]),
-                ]
-                  .filter(Boolean)
-                  .sort((a, b) => b - a)
-                  .map(height => (
-                    <option key={height} value={height}>
-                      Up to {height}p
+        <div className="te-download-card-head">
+          <Preview
+            url={
+              items.find(item => item.url === context?.url)?.url ||
+              items.find(item => item.selected)?.url ||
+              context?.url
+            }
+            thumbnail={context?.thumbnail}
+            title={title || context?.title || 'Video'}
+          />
+          <div className="te-download-card-body">
+            <h2 className="te-download-title" title={title || context?.title}>
+              {title || context?.title || 'Connect to a video'}
+            </h2>
+            <div className="te-download-toolbar">
+              {preferences.video && (
+                <select
+                  className="te-select te-quality-picker"
+                  aria-label="Video quality"
+                  value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                  disabled={busy || settingsLocked || qualityLoading}
+                  onChange={event => {
+                    const [format, height] = event.target.value.split(':');
+                    void changePreferences({
+                      ...preferences,
+                      format: format === 'auto' ? undefined : (format as 'mp4' | 'webm'),
+                      maxHeight: Number(height) || undefined,
+                    });
+                  }}
+                >
+                  <option value="auto:0">Auto quality</option>
+                  {renditions.map(item => (
+                    <option
+                      key={`${item.format}:${item.height}`}
+                      value={`${item.format}:${item.height}`}
+                    >
+                      {item.format.toUpperCase()} · {item.height ? `${item.height}p` : 'Source'}
                     </option>
                   ))}
-              </select>
-            </label>
-            {qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
-            {context?.sources.length && !renditions.length ? (
+                  {(preferences.format || preferences.maxHeight) &&
+                    !renditions.some(
+                      item =>
+                        item.format === preferences.format &&
+                        item.height === (preferences.maxHeight || 0)
+                    ) && (
+                      <option
+                        value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                      >
+                        {preferences.format?.toUpperCase() || 'Auto'} ·{' '}
+                        {preferences.maxHeight ? `≤${preferences.maxHeight}p` : 'Source'}
+                      </option>
+                    )}
+                </select>
+              )}
               <button
-                type="button"
-                className="te-btn"
-                disabled={busy || settingsLocked || qualityLoading}
-                onClick={() => {
-                  const abort = new AbortController();
-                  qualityController.current = abort;
-                  setQualityLoading(true);
-                  void inspectVideo(context, abort.signal, true)
-                    .then(value => {
-                      if (!abort.signal.aborted) setRenditions(value);
-                    })
-                    .catch(err => {
-                      if (!abort.signal.aborted) setQualityNotice(errorText(err));
-                    })
-                    .finally(() => {
-                      if (!abort.signal.aborted) setQualityLoading(false);
-                    });
-                }}
+                className="te-btn-primary te-download-button"
+                disabled={
+                  busy ||
+                  qualityLoading ||
+                  !context ||
+                  !validChoice ||
+                  !items.some(
+                    item =>
+                      item.selected && item.status !== 'completed' && item.status !== 'skipped'
+                  )
+                }
+                onClick={() => void runQueue()}
               >
-                {qualityLoading ? 'Reading qualities…' : 'Detect available qualities'}
+                <Download size={15} />
+                Download
               </button>
-            ) : null}
+            </div>
+            <p className="te-muted te-card-status">
+              {items.filter(item => item.selected).length} selected · {counts.saved}/{counts.total}{' '}
+              saved
+            </p>
           </div>
-        )}
+        </div>
+        {preferences.video && context?.sources.length && !renditions.length ? (
+          <button
+            type="button"
+            className="te-text-button"
+            disabled={busy || settingsLocked || qualityLoading}
+            onClick={() => {
+              const abort = new AbortController();
+              qualityController.current = abort;
+              setQualityLoading(true);
+              void inspectVideo(context, abort.signal, true)
+                .then(value => {
+                  if (!abort.signal.aborted) setRenditions(value);
+                })
+                .catch(err => {
+                  if (!abort.signal.aborted) setQualityNotice(errorText(err));
+                })
+                .finally(() => {
+                  if (!abort.signal.aborted) setQualityLoading(false);
+                });
+            }}
+          >
+            {qualityLoading ? 'Reading qualities…' : 'Detect available qualities'}
+          </button>
+        ) : null}
+        {qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
         {listSize && listSize.expected !== listSize.unique && (
           <p className="te-muted text-sm">
             {listSize.loaded}/{listSize.expected} playlist entries loaded · {listSize.unique} unique
@@ -1203,116 +1220,101 @@ export function VideoDownload({
             </button>
           </div>
         )}
-        {directory && (
-          <p className="te-muted text-xs break-words">
-            Save to {directory.name}
-            {context ? `/${getFolderName(context.url)}` : ''}
-          </p>
-        )}
         {!!items.length && (
-          <div className="flex flex-col gap-3">
-            <label>
-              <input
-                type="checkbox"
-                disabled={busy || !eligible.length}
-                checked={!!eligible.length && eligible.every(item => item.selected)}
-                onChange={e =>
-                  void persistItems(
-                    items.map(item => ({
-                      ...item,
-                      selected: item.available !== false && e.target.checked,
-                    })),
-                    context!.url
-                  ).catch(report)
-                }
-              />{' '}
-              Select all ({eligible.length})
-            </label>
-            <ul className="flex flex-col">
-              {items.map((item, index) => (
-                <li key={item.id} className="py-2">
-                  {item.section && (index === 0 || items[index - 1].section !== item.section) && (
-                    <h3 className="font-semibold mb-3">{item.section}</h3>
-                  )}
-                  <Preview
-                    url={item.url}
-                    thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
-                    title={item.title}
-                  />
-                  <label>
-                    <input
-                      type="checkbox"
-                      disabled={busy || item.available === false}
-                      checked={item.selected}
-                      onChange={e =>
-                        void persistItems(
-                          items.map(value =>
-                            value.id === item.id ? { ...value, selected: e.target.checked } : value
-                          ),
-                          context!.url
-                        ).catch(report)
-                      }
-                    />{' '}
-                    {item.title}
-                  </label>
-                  <span className="te-muted text-sm">
-                    {' '}
-                    — {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
-                  </span>
-                  {(getSaved(item, preferences).video ||
-                    getSaved(item, preferences).transcript) && (
-                    <button
-                      className="te-small-button"
-                      type="button"
-                      aria-label={`Remove downloaded item: ${item.title}`}
-                      title="Remove from list; keep saved files"
-                      disabled={busy}
-                      onClick={() => {
-                        removed.current.add(`${groupKey(context!.url)}:${item.id}`);
-                        void persistItems(
-                          items.filter(value => value.id !== item.id),
-                          context!.url
-                        ).catch(report);
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                  {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
-                </li>
-              ))}
-            </ul>
-            <p className="te-muted text-xs">
-              {items.filter(item => item.selected).length} selected ·{' '}
-              {preferences.video && (
-                <>
-                  {counts.video}/{counts.total} videos saved
-                </>
-              )}
-              {preferences.video && preferences.transcript && ' · '}
-              {preferences.transcript && (
-                <>
-                  {counts.transcript}/{counts.total} transcripts saved
-                </>
-              )}
-            </p>
-          </div>
+          <details className="te-item-details">
+            <summary>Videos ({items.length})</summary>
+            <div className="flex flex-col gap-3 mt-2">
+              <label>
+                <input
+                  type="checkbox"
+                  disabled={busy || !eligible.length}
+                  checked={!!eligible.length && eligible.every(item => item.selected)}
+                  onChange={e =>
+                    void persistItems(
+                      items.map(item => ({
+                        ...item,
+                        selected: item.available !== false && e.target.checked,
+                      })),
+                      context!.url
+                    ).catch(report)
+                  }
+                />{' '}
+                Select all ({eligible.length})
+              </label>
+              <ul className="flex flex-col">
+                {items.map((item, index) => (
+                  <li key={item.id} className="py-2">
+                    {item.section && (index === 0 || items[index - 1].section !== item.section) && (
+                      <h3 className="font-semibold mb-3">{item.section}</h3>
+                    )}
+                    <Preview
+                      url={item.url}
+                      thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
+                      title={item.title}
+                    />
+                    <label>
+                      <input
+                        type="checkbox"
+                        disabled={busy || item.available === false}
+                        checked={item.selected}
+                        onChange={e =>
+                          void persistItems(
+                            items.map(value =>
+                              value.id === item.id
+                                ? { ...value, selected: e.target.checked }
+                                : value
+                            ),
+                            context!.url
+                          ).catch(report)
+                        }
+                      />{' '}
+                      {item.title}
+                    </label>
+                    <span className="te-muted text-sm">
+                      {' '}
+                      —{' '}
+                      {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
+                    </span>
+                    {(getSaved(item, preferences).video ||
+                      getSaved(item, preferences).transcript) && (
+                      <button
+                        className="te-small-button"
+                        type="button"
+                        aria-label={`Remove downloaded item: ${item.title}`}
+                        title="Remove from list; keep saved files"
+                        disabled={busy}
+                        onClick={() => {
+                          removed.current.add(`${groupKey(context!.url)}:${item.id}`);
+                          void persistItems(
+                            items.filter(value => value.id !== item.id),
+                            context!.url
+                          ).catch(report);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                    {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
+                  </li>
+                ))}
+              </ul>
+              <p className="te-muted text-xs">
+                {items.filter(item => item.selected).length} selected ·{' '}
+                {preferences.video && (
+                  <>
+                    {counts.video}/{counts.total} videos saved
+                  </>
+                )}
+                {preferences.video && preferences.transcript && ' · '}
+                {preferences.transcript && (
+                  <>
+                    {counts.transcript}/{counts.total} transcripts saved
+                  </>
+                )}
+              </p>
+            </div>
+          </details>
         )}
-        <button
-          className="te-btn-primary"
-          disabled={
-            busy ||
-            qualityLoading ||
-            !context ||
-            !validChoice ||
-            !items.some(
-              item => item.selected && item.status !== 'completed' && item.status !== 'skipped'
-            )
-          }
-          onClick={() => void runQueue()}
-        >
-          Download
-        </button>
       </section>
       <dialog
         ref={accessDialog}

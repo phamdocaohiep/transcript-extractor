@@ -210,10 +210,14 @@ it('detects available HLS qualities and downloads the selected resolution', asyn
   await render();
   expect(fetch).not.toHaveBeenCalled();
   await click('Detect available qualities');
-  const select = container.querySelector<HTMLSelectElement>('[aria-label="Resolution"]')!;
-  expect([...select.options].map(option => option.value)).toEqual(['0', '1080', '720']);
+  const select = container.querySelector<HTMLSelectElement>('[aria-label="Video quality"]')!;
+  expect([...select.options].map(option => option.value)).toEqual([
+    'auto:0',
+    'mp4:1080',
+    'mp4:720',
+  ]);
   await act(async () => {
-    select.value = '720';
+    select.value = 'mp4:720';
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
   await click('Choose destination folder');
@@ -225,6 +229,16 @@ it('detects available HLS qualities and downloads the selected resolution', asyn
     vi.mocked(fetch).mock.calls.some(([url]) => String(url) === 'https://cdn.test/1080.m3u8')
   ).toBe(false);
   expect(container.textContent).toContain('1/1 videos saved');
+});
+it('keeps the compact download action beside one quality picker and collapses item details', async () => {
+  await render();
+  const toolbar = container.querySelector('.te-download-toolbar')!;
+  expect(toolbar.querySelector('[aria-label="Video quality"]')).not.toBeNull();
+  expect(toolbar.querySelector('.te-download-button')?.textContent).toBe('Download');
+  expect(container.querySelectorAll('.te-download-button')).toHaveLength(1);
+  const details = container.querySelector<HTMLDetailsElement>('.te-item-details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')?.textContent).toBe('Videos (1)');
 });
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
@@ -628,14 +642,14 @@ it('keeps a download alive while switching between Main and Settings', async () 
 
 it('offers one primary download action for the chosen scope', async () => {
   await render();
-  expect(container.querySelectorAll('section .te-btn-primary')).toHaveLength(1);
+  expect(container.querySelectorAll('section .te-download-button')).toHaveLength(1);
   listing = [1].map(id => ({
     id: String(id),
     title: `Item ${id}`,
     url: `https://www.udemy.com/course/test/learn/lecture/${id}`,
   }));
-  expect(container.querySelectorAll('section .te-btn-primary')).toHaveLength(1);
-  expect(container.querySelector('.te-btn-primary')?.textContent).toContain('Download');
+  expect(container.querySelectorAll('section .te-download-button')).toHaveLength(1);
+  expect(container.querySelector('.te-download-button')?.textContent).toContain('Download');
 });
 
 it('shows a configuration error when Download is clicked without a saved folder', async () => {
@@ -984,7 +998,7 @@ it('downloads from a captured playback session when YouTube exposes no direct fi
     },
   });
   await render();
-  expect(container.textContent).toContain('Previous folder/www.youtube.com_example');
+  expect(container.textContent).toContain('Folder: Previous folder — change');
   await click('Download');
   expect(saveAdaptive).toHaveBeenCalledWith(
     expect.objectContaining({ kind: 'adaptive', session: adaptive }),

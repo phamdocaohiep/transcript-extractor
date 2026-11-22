@@ -111,8 +111,9 @@ not delete saved files. The close button at the top right of a queue stops and d
 leaving its source tab and saved files intact. It stays dismissed for that collection until the panel is reopened
 or the tab moves to another collection.
 
-Video rows show a preview when a YouTube thumbnail or source-page poster is available. **Video format**
-offers Auto and available MP4/WebM outputs. **Resolution** limits advertised renditions to the selected
+The compact download card places a preview beside its title, one combined **Video quality** picker,
+and a small Download button. The **Videos** disclosure opens the item selection and detailed statuses.
+The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
 height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
 playlist without downloading media segments. A fixed-quality source stays at its original quality. These
 controls select existing streams; they do not transcode or upscale video. Unsupported selections fail clearly.
