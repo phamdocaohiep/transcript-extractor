@@ -185,6 +185,9 @@ A small observer runs at document start on YouTube and leaves the player's reque
 The playback context stays in memory and is not included in settings, queue records or logs. A page already
 open before the extension update may need a manual reload to load the observer (or the optional automatic-reload setting). Both tracks are consumed
 concurrently, checked against the advertised duration, and combined using the same browser-only muxer.
+Track types are recognized from MIME metadata even when optional quality labels are absent.
+If a saved format or resolution is unavailable but Auto has a compatible pair, the error offers
+the small **Retry** action to reset quality to Auto and try again. Missing tracks are reported separately.
 
 This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,
 or run the Python/Node/FFmpeg backend used by a desktop downloader. If the player's current session cannot
@@ -201,8 +204,9 @@ SABR protocol reader: [GoogleVideo](https://github.com/LuanRT/googlevideo) (MIT,
 Open the gear button → **Diagnostics** → **Download diagnostic log** to save a JSON support file.
 Recording starts with this version and persists in the Chrome profile. Runs include a numeric source-tab ID
 to distinguish concurrent queues without storing page URLs. The bounded log retains permission
-requests/results, CDN origin patterns, response codes, retries and saved-file status. It excludes cookies,
-tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
+requests/results, CDN origin patterns, response codes, retries and saved-file status.
+Format-selection failures also record the selected quality, track counts and whether Auto can work.
+It excludes cookies, tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
 first when the 1,000-entry limit is reached, preserving permission and result events where possible.
 
 HTTPS network access (`https://*/*`) is declared as a required installation permission, including CDN hosts

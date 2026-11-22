@@ -21,6 +21,33 @@ afterEach(async () => {
   await flushDiagnostics();
   vi.unstubAllGlobals();
 });
+it('exports safe format-selection evidence without playback metadata', async () => {
+  const trace = startRun('manual');
+  trace('selection_failed', {
+    extension: 'webm',
+    height: 1080,
+    formatCount: 2,
+    videoCount: 1,
+    audioCount: 1,
+    fallbackAvailable: true,
+    token: 'private-token',
+    url: 'https://host.test/?sig=secret',
+  } as never);
+  const text = await exportDiagnostics();
+  const log = JSON.parse(text);
+  expect(
+    log.events.find((entry: { event: string }) => entry.event === 'selection_failed').fields
+  ).toEqual({
+    extension: 'webm',
+    height: 1080,
+    formatCount: 2,
+    videoCount: 1,
+    audioCount: 1,
+    fallbackAvailable: true,
+  });
+  expect(text).not.toContain('private-token');
+  expect(text).not.toContain('sig=secret');
+});
 it('persists permission results in order and exports a readable support log', async () => {
   const trace = startRun('manual');
   trace('permission_needed', { origins: ['https://*.googlevideo.com/*'] });

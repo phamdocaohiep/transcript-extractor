@@ -19,7 +19,16 @@ export function selectAdaptive(
   choice: Pick<Preferences, 'format' | 'maxHeight'> = {}
 ): AdaptivePlan | null {
   const formats = session.formats
-    .map(buildSabrFormat)
+    .map(source => {
+      const format = buildSabrFormat(source);
+      const mime = format.mimeType || '';
+      // Quality labels are optional player metadata, not track-type identifiers.
+      return {
+        ...format,
+        hasVideo: format.hasVideo || mime.startsWith('video/'),
+        hasAudio: format.hasAudio || mime.startsWith('audio/') || /mp4a|opus|vorbis/.test(mime),
+      };
+    })
     .filter(format => !format.hasText && format.hasVideo !== format.hasAudio);
   const candidates: StreamInfo[] = formats.map(format => ({
     url: session.url,

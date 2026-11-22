@@ -1053,65 +1053,97 @@ it('discovers the signed-in YouTube player in MAIN world and saves paired tracks
   expect(container.textContent).toContain('1 video & transcript downloaded');
 });
 
-it('downloads from a captured playback session when YouTube exposes no direct file URLs', async () => {
-  const { saveAdaptive } = await import('../lib/adaptive-stream');
-  currentUrl = 'https://www.youtube.com/watch?v=example';
-  listing = [{ id: 'example', title: 'An example', url: currentUrl }];
-  hasSources = false;
-  const getDirectoryHandle = vi.fn(async () => folder);
-  vi.mocked(loadDirectory).mockResolvedValue({
-    name: 'Previous folder',
-    getDirectoryHandle,
-  } as unknown as FileSystemDirectoryHandle);
-  const adaptive = {
-    videoId: 'example',
-    url: 'https://r1.googlevideo.com/videoplayback?ump=1',
-    config: 'AQI=',
-    token: 'private-fixture-token',
-    duration: 60,
-    clientInfo: { clientName: 1 },
-    formats: [
-      {
-        itag: 137,
-        lastModified: '1',
-        bitrate: 1000,
-        mimeType: 'video/mp4; codecs="avc1.640028"',
-        qualityLabel: '720p',
-        height: 720,
-        approxDurationMs: '60000',
+it.each([{}, { format: 'webm' as const }, { maxHeight: 144 }])(
+  'downloads a captured session without labels and recovers unavailable quality %j',
+  async choice => {
+    const { saveAdaptive } = await import('../lib/adaptive-stream');
+    const { completionKey } = await import('../lib/download');
+    vi.mocked(saveAdaptive).mockClear();
+    vi.mocked(savePreferences).mockClear();
+    vi.mocked(loadPreferences).mockResolvedValue({
+      video: true,
+      transcript: true,
+      automatic: false,
+      ...choice,
+    });
+    currentUrl = 'https://www.youtube.com/watch?v=example';
+    listing = [{ id: 'example', title: 'An example', url: currentUrl }];
+    hasSources = false;
+    const getDirectoryHandle = vi.fn(async () => folder);
+    vi.mocked(loadDirectory).mockResolvedValue({
+      name: 'Previous folder',
+      getDirectoryHandle,
+    } as unknown as FileSystemDirectoryHandle);
+    const adaptive = {
+      videoId: 'example',
+      url: 'https://r1.googlevideo.com/videoplayback?ump=1',
+      config: 'AQI=',
+      token: 'private-fixture-token',
+      duration: 60,
+      clientInfo: { clientName: 1 },
+      formats: [
+        {
+          itag: 137,
+          lastModified: '1',
+          bitrate: 1000,
+          mimeType: 'video/mp4; codecs="avc1.640028"',
+          height: 720,
+          approxDurationMs: '60000',
+        },
+        {
+          itag: 140,
+          lastModified: '1',
+          bitrate: 128,
+          mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+          approxDurationMs: '60000',
+        },
+      ],
+    };
+    Object.assign(chrome, {
+      scripting: {
+        executeScript: vi.fn(async () => [
+          { result: { url: currentUrl, title: 'An example', streams: [], adaptive } },
+        ]),
       },
-      {
-        itag: 140,
-        lastModified: '1',
-        bitrate: 128,
-        mimeType: 'audio/mp4; codecs="mp4a.40.2"',
-        audioQuality: 'AUDIO_QUALITY_MEDIUM',
-        approxDurationMs: '60000',
-      },
-    ],
-  };
-  Object.assign(chrome, {
-    scripting: {
-      executeScript: vi.fn(async () => [
-        { result: { url: currentUrl, title: 'An example', streams: [], adaptive } },
-      ]),
-    },
-  });
-  await render();
-  expect(container.textContent).toContain('Folder: Previous folder — change');
-  await click('Download');
-  expect(saveAdaptive).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: 'adaptive', session: adaptive }),
-    expect.any(Function),
-    expect.anything(),
-    expect.anything(),
-    expect.any(Function),
-    expect.any(Function)
-  );
-  expect(getDirectoryHandle).toHaveBeenCalledWith('www.youtube.com_example', { create: true });
-  expect(container.textContent).toContain('1 video & transcript downloaded');
-  expect(JSON.stringify(stored)).not.toContain('private-fixture-token');
-});
+    });
+    await render();
+    expect(container.textContent).toContain('Folder: Previous folder — change');
+    await click('Download');
+    expect(chrome.tabs.reload).not.toHaveBeenCalled();
+    if (Object.keys(choice).length) {
+      expect(saveAdaptive).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('Retry will use Auto quality');
+      expect(container.textContent).not.toContain('Retry video list');
+      await click('Retry');
+      expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+      expect(savePreferences).toHaveBeenCalledWith({
+        video: true,
+        transcript: true,
+        automatic: false,
+        format: undefined,
+        maxHeight: undefined,
+      });
+      expect(stored[completionKey(currentUrl, choice)]).toBeUndefined();
+    }
+    expect(saveAdaptive).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'adaptive', session: adaptive }),
+      expect.any(Function),
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      expect.any(Function)
+    );
+    expect(getDirectoryHandle).toHaveBeenCalledWith('www.youtube.com_example', { create: true });
+    expect(container.textContent).toContain('1 video & transcript downloaded');
+    expect(stored[completionKey(currentUrl)]).toEqual(expect.objectContaining({ video: true }));
+    expect(
+      vi
+        .mocked(chrome.tabs.sendMessage)
+        .mock.calls.some(call => (call[1] as { type: string }).type === 'PREPARE_DOWNLOAD')
+    ).toBe(false);
+    expect(JSON.stringify(stored)).not.toContain('private-fixture-token');
+  }
+);
 
 it('does not start an automatic retry immediately after a manual download fails', async () => {
   vi.useFakeTimers();

@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { selectStreams, type StreamInfo } from './stream-discovery';
 import { selectAdaptive } from './adaptive-stream';
 import { resolveHls } from './hls';
-import { inspectVideo } from './download';
+import { inspectVideo, prepareVideo, SelectionUnavailable } from './download';
 import type { AdaptiveInfo } from './playback-session';
 
 const streams: StreamInfo[] = [
@@ -47,6 +47,58 @@ const streams: StreamInfo[] = [
     bitrate: 160,
   },
 ];
+const session: AdaptiveInfo = {
+  videoId: 'example',
+  url: 'https://r1.googlevideo.com/videoplayback',
+  config: '',
+  clientInfo: {},
+  duration: 30,
+  formats: [
+    {
+      itag: 137,
+      mimeType: 'video/mp4; codecs="avc1.640028"',
+      height: 720,
+      lastModified: '1',
+      bitrate: 1000,
+    },
+    { itag: 140, mimeType: 'audio/mp4; codecs="mp4a.40.2"', lastModified: '1', bitrate: 128 },
+  ],
+};
+it('recognizes separate tracks without optional quality labels', () => {
+  const selected = selectAdaptive(session);
+  expect(selected?.video.itag).toBe(137);
+  expect(selected?.video.hasVideo).toBe(true);
+  expect(selected?.audio.itag).toBe(140);
+  expect(selected?.audio.hasAudio).toBe(true);
+  expect(selected?.extension).toBe('mp4');
+});
+it('excludes a combined stream from SABR track pairs', () => {
+  const selected = selectAdaptive({
+    ...session,
+    formats: [
+      {
+        itag: 18,
+        mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+        height: 1080,
+        bitrate: 2000,
+      },
+      ...session.formats,
+    ],
+  });
+  expect(selected?.video.itag).toBe(137);
+});
+it('distinguishes an unavailable saved quality from genuinely missing tracks', async () => {
+  const signal = new AbortController().signal;
+  await expect(
+    prepareVideo('', signal, [], session, undefined, { format: 'webm' })
+  ).rejects.toBeInstanceOf(SelectionUnavailable);
+  await expect(
+    prepareVideo('', signal, streams, undefined, undefined, { maxHeight: 144 })
+  ).rejects.toBeInstanceOf(SelectionUnavailable);
+  await expect(
+    prepareVideo('', signal, [], { ...session, formats: [session.formats[0]] })
+  ).rejects.toThrow('complete downloadable video and audio pair');
+});
 it('applies the selected container and resolution while keeping compatible audio', () => {
   expect(selectStreams(streams)?.video.height).toBe(720);
   expect(selectStreams(streams, { format: 'mp4', maxHeight: 1080 })?.video.height).toBe(1080);

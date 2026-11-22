@@ -5,10 +5,12 @@ import { Trash2, X, Download } from 'lucide-react';
 import { Preview } from './Preview';
 import {
   HostAccessNeeded,
+  SelectionUnavailable,
   prepareVideo,
   saveDownload,
   completionKey,
   inspectVideo,
+  type DownloadPlan,
   type Rendition,
 } from '../lib/download';
 import { lectureId } from '../lib/collection';
@@ -99,6 +101,7 @@ export function VideoDownload({
   const qualityController = useRef<AbortController | null>(null);
   const removed = useRef(new Set<string>());
   const retryAfterRefresh = useRef(false);
+  const resetSelection = useRef(false);
   const listedGroup = useRef('');
   useEffect(() => {
     if (!context || !preferences.video) return;
@@ -391,6 +394,7 @@ export function VideoDownload({
   async function changePreferences(value: Preferences) {
     try {
       await savePreferences(value);
+      resetSelection.current = false;
       setPreferences(value);
       settings.current = value;
       if (
@@ -417,16 +421,22 @@ export function VideoDownload({
   ) {
     if (includeVideo && next.protected)
       throw new Error('This player uses DRM. Protected video is not supported.');
-    const nextPlan = includeVideo
-      ? await prepareVideo(
-          selected,
-          signal,
-          next.streams,
-          next.adaptive,
-          trace.current,
-          preferences
-        )
-      : null;
+    let nextPlan: DownloadPlan | null = null;
+    try {
+      nextPlan = includeVideo
+        ? await prepareVideo(
+            selected,
+            signal,
+            next.streams,
+            next.adaptive,
+            trace.current,
+            preferences
+          )
+        : null;
+    } catch (err) {
+      if (err instanceof SelectionUnavailable) resetSelection.current = true;
+      throw err;
+    }
     let text = '';
     let warning = '';
     if (includeTranscript) {
@@ -656,6 +666,14 @@ export function VideoDownload({
     controller.current = abort;
     try {
       // This reload is explicitly requested by Retry, independently of auto reload.
+      if (resetSelection.current) {
+        const value = { ...preferences, format: undefined, maxHeight: undefined };
+        await savePreferences(value);
+        settings.current = value;
+        setPreferences(value);
+        removed.current.clear();
+        resetSelection.current = false;
+      }
       await chrome.tabs.reload(tabId);
       const current = await waitForContext(abort.signal);
       setContext(current);
@@ -697,7 +715,10 @@ export function VideoDownload({
     setListFailed(false);
     try {
       const current = await pageContext();
-      if (listedGroup.current && listedGroup.current !== groupKey(current.url)) setItems([]);
+      if (listedGroup.current && listedGroup.current !== groupKey(current.url)) {
+        resetSelection.current = false;
+        setItems([]);
+      }
       setContext(current);
       const response = await send('GET_DOWNLOAD_ITEMS');
       abort.signal.throwIfAborted();

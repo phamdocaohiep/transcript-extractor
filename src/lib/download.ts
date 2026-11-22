@@ -38,6 +38,11 @@ export class HostAccessNeeded extends Error {
     super('Allow access to the video host, then retry.');
   }
 }
+export class SelectionUnavailable extends Error {
+  constructor() {
+    super('The saved quality is unavailable for this video. Retry will use Auto quality.');
+  }
+}
 
 export type DownloadPlan =
   | HlsPlan
@@ -138,12 +143,26 @@ export async function prepareVideo(
       });
       return { kind: 'tracks', ...selected };
     }
-    if (!adaptive && !source)
-      throw new Error('The selected format or resolution is not available for this video.');
+    if (!adaptive && !source) {
+      if (selectStreams(streams)) throw new SelectionUnavailable();
+      throw new Error('The player did not expose a complete downloadable video and audio pair.');
+    }
   }
   if (adaptive) {
     const plan = selectAdaptive(adaptive, choice);
-    if (!plan) throw new Error('The player did not advertise compatible video and audio formats.');
+    if (!plan) {
+      const fallback = selectAdaptive(adaptive);
+      trace?.('selection_failed', {
+        extension: choice.format,
+        height: choice.maxHeight,
+        formatCount: adaptive.formats.length,
+        videoCount: adaptive.formats.filter(format => format.mimeType?.startsWith('video/')).length,
+        audioCount: adaptive.formats.filter(format => format.mimeType?.startsWith('audio/')).length,
+        fallbackAvailable: !!fallback,
+      });
+      if (fallback) throw new SelectionUnavailable();
+      throw new Error('The player did not expose a complete downloadable video and audio pair.');
+    }
     await checkHosts([adaptive.url], trace);
     trace?.('plan_ready', {
       protocol: 'sabr',
@@ -156,8 +175,7 @@ export async function prepareVideo(
     return plan;
   }
   const url = hlsUrl(source);
-  if (choice.format === 'webm')
-    throw new Error('This source provides MP4 output. Choose MP4 or Auto.');
+  if (choice.format === 'webm') throw new SelectionUnavailable();
   if (/\.mp4$/i.test(new URL(url).pathname)) {
     await probeMediaFile(await fetchVideo(url, signal, undefined, {}, trace), signal);
     trace?.('plan_ready', { protocol: 'file', extension: 'mp4' });

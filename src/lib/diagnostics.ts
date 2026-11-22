@@ -18,6 +18,7 @@ const events = new Set([
   'retry',
   'file_saved',
   'list_loaded',
+  'selection_failed',
 ]);
 type EventName =
   | 'run_started'
@@ -36,8 +37,12 @@ type EventName =
   | 'transcript_failed'
   | 'retry'
   | 'file_saved'
-  | 'list_loaded';
+  | 'list_loaded'
+  | 'selection_failed';
 interface Fields {
+  fallbackAvailable?: boolean;
+  videoCount?: number;
+  audioCount?: number;
   tab?: number;
   mode?: 'manual' | 'automatic' | 'list';
   source?: 'youtube' | 'udemy' | 'other';
@@ -83,6 +88,8 @@ let pending = Promise.resolve();
 let writeFailures = 0;
 const originPattern = /^https:\/\/(?:\*\.)?[a-z0-9.-]+(?::\d+)?\/\*$/i;
 const numberFields = new Set([
+  'videoCount',
+  'audioCount',
   'tab',
   'item',
   'total',
@@ -100,6 +107,7 @@ const numberFields = new Set([
   'uniqueCount',
 ]);
 const booleanFields = new Set([
+  'fallbackAvailable',
   'video',
   'transcript',
   'automatic',
