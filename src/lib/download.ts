@@ -387,7 +387,11 @@ export async function saveDownload(
       }
       signal.throwIfAborted();
       await writer.close();
-      await recordFile(completionKey(context.url), { directory, name: filename });
+      await recordFile(completionKey(context.url), {
+        directory,
+        name: filename,
+        selection: selectionKey(preferences),
+      });
       trace?.('file_saved', {
         format: 'video',
         extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',

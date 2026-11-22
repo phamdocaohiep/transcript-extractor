@@ -106,11 +106,38 @@ overwritten (a short suffix is added on collision). The original video title rem
 The **Timestamps** export switch also applies to Markdown saved alongside videos: enabled preserves
 available source timestamps, disabled removes them. Missing source timing is not fabricated.
 New video and transcript files are written directly into that folder, without creating a source subfolder.
-The small folder icon beside a completed result opens Chrome's file browser at its saved destination;
-it does not change Settings or launch Finder. Saved locations are retained for new downloads even if
-you later choose another destination. Older downloads without a recorded location show the same folder
-icon as **Browse configured folder**, with a tooltip explaining that the original location is unknown.
-If no folder is configured, the icon stays visible but disabled with a Settings hint.
+The small folder icon **beside Completed** reveals the saved file in macOS Finder through an optional
+local helper. It never opens a file/folder selection dialog. New downloads retain exact filenames and
+locations even if the global destination later changes. Older entries without file records open their
+connected saved folder, or the configured folder with a tooltip explaining that the original location is unknown.
+If no folder is available, the icon stays visible but disabled with a Settings hint.
+
+### Finder helper setup (macOS, Chrome)
+
+The source installer requires Node.js and Xcode Command Line Tools (`swiftc`). From this repository:
+
+```sh
+npm run helper:install -- --extension-id YOUR_EXTENSION_ID
+```
+
+Copy the ID from `chrome://extensions`; Settings also shows the command using the running extension's ID.
+The installer compiles the bundled Swift source and registers the helper for that ID in the current macOS
+user's Chrome NativeMessagingHosts directory. It requires no administrator access, does not read Chrome profiles,
+and preserves previously registered extension IDs. The helper is separate from the extension/store package.
+Updates with the same ID reuse installation; a new unpacked ID must be registered with the same command.
+
+After reloading the updated extension and accepting Chrome's native-messaging permission if prompted,
+choose Settings → **Open in Finder · macOS helper** → **Connect folder to Finder**.
+Select the **same folder** as the configured download destination once. A hidden
+`.transcript-extractor-finder.json` marker verifies the native path against the browser's selected folder.
+This setup-only chooser never appears when opening a completed file. Connect each new destination once;
+older connections stay usable. If a folder is moved, reconnect it. Cancelling or selecting another folder
+does not register it. The helper accepts only ping, folder registration and Finder reveal actions;
+it never runs arbitrary commands, deletes files or sends data over the network.
+
+`npm run helper:test` compiles the actual native executable and checks message framing, origin validation
+and request rejection without opening Finder windows. Extension tests cover marker setup, reveal dispatch
+and errors. These checks do not establish live Chrome-to-Finder UI acceptance.
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.

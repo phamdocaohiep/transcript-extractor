@@ -4,6 +4,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { VideoDownload } from './VideoDownload';
+import { revealFile, connectFolder } from '../lib/finder';
+vi.mock('../lib/finder', () => ({
+  revealFile: vi.fn(async () => undefined),
+  connectFolder: vi.fn(async () => undefined),
+}));
 import { flushDiagnostics, exportDiagnostics } from '../lib/diagnostics';
 import {
   loadPreferences,
@@ -73,6 +78,8 @@ let hasPlayer = true;
 let hasSources = true;
 let listing: { id: string; title: string; url: string; kind?: string }[];
 beforeEach(() => {
+  vi.mocked(revealFile).mockReset().mockResolvedValue(undefined);
+  vi.mocked(connectFolder).mockReset().mockResolvedValue(undefined);
   // jsdom does not implement the native dialog methods.
   Object.defineProperties(HTMLDialogElement.prototype, {
     showModal: {
@@ -133,7 +140,10 @@ beforeEach(() => {
       },
       onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
     },
-    runtime: { sendMessage: vi.fn(async () => ({ success: true, data: { status: 'active' } })) },
+    runtime: {
+      id: 'lgjchnenkgchhcbkbfbakpejkkagjlfc',
+      sendMessage: vi.fn(async () => ({ success: true, data: { status: 'active' } })),
+    },
     tabs: {
       reload: vi.fn(async () => undefined),
       update: vi.fn(async (_id: number, options: { url: string }) => {
@@ -422,7 +432,7 @@ it('keeps progress, combining details and cancellation inside the source card', 
   expect(card.querySelector('.te-preview-status')?.textContent).toBe('Completed');
   expect(card.querySelector('progress')).toBeNull();
 });
-it('writes directly into the configured folder and browses its saved location without changing settings', async () => {
+it('writes directly into the configured folder and reveals its saved file in Finder without changing settings', async () => {
   const locations = new Map<string, FileSystemDirectoryHandle>();
   vi.mocked(saveDirectory).mockImplementation(async (handle, key = 'directory') => {
     locations.set(key, handle);
@@ -438,18 +448,21 @@ it('writes directly into the configured folder and browses its saved location wi
   await click('Download');
   expect(destination.getDirectoryHandle).not.toHaveBeenCalled();
   expect(folder.getFileHandle).toHaveBeenCalled();
-  const button = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Browse saved location"]'
-  )!;
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Open file location"]')!;
   expect(button).not.toBeNull();
+  expect(button.closest('.te-status-line')?.querySelector('.te-preview-status')?.textContent).toBe(
+    'Completed'
+  );
+  expect(button.closest('.te-item-status')).toBeNull();
   expect(container.querySelector('[aria-label^="Edit filename:"]')).toBeNull();
   await act(async () => button.click());
-  expect(picker).toHaveBeenCalledWith({ startIn: destination });
+  expect(revealFile).toHaveBeenCalledWith(destination, expect.stringMatching(/\.mp4$/));
+  expect(picker).not.toHaveBeenCalled();
   expect(locations.get('directory')).toBe(destination);
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
   vi.mocked(saveDirectory).mockImplementation(async () => undefined);
 });
-it('shows a folder button for older completed downloads without recorded locations', async () => {
+it('opens Finder at the configured folder for older completed downloads without recorded locations', async () => {
   const destination = {
     name: 'Configured folder',
     ...folder,
@@ -461,23 +474,84 @@ it('shows a folder button for older completed downloads without recorded locatio
   const picker = vi.fn(async () => []);
   vi.stubGlobal('showOpenFilePicker', picker);
   await render();
-  const button = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Browse configured folder"]'
-  )!;
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Open file location"]')!;
   expect(button).not.toBeNull();
   expect(button.disabled).toBe(false);
   expect(button.title).toContain('original location was not recorded');
+  expect(button.closest('.te-status-line')?.querySelector('.te-preview-status')?.textContent).toBe(
+    'Completed'
+  );
   await act(async () => button.click());
-  expect(picker).toHaveBeenCalledWith({ startIn: destination });
+  expect(revealFile).toHaveBeenCalledWith(destination, undefined);
+  expect(picker).not.toHaveBeenCalled();
   expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(Object.keys(writes)).toHaveLength(0);
+});
+it('reveals the selected quality rather than the last rendition saved elsewhere', async () => {
+  const selected = { name: '720 folder', ...folder } as unknown as FileSystemDirectoryHandle;
+  const other = { name: '1080 folder', ...folder } as unknown as FileSystemDirectoryHandle;
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    format: 'mp4',
+    maxHeight: 720,
+  });
+  vi.mocked(loadDirectory).mockResolvedValue(selected);
+  vi.mocked(loadFiles).mockResolvedValue([
+    { directory: selected, name: '720.mp4', selection: 'mp4:720' },
+    { directory: other, name: '1080.mp4', selection: 'mp4:1080' },
+  ]);
+  stored[`download_completed:${currentUrl}:quality:mp4:720`] = { video: true, transcript: true };
+  await render();
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Open file location"]')!.click()
+  );
+  expect(revealFile).toHaveBeenCalledExactlyOnceWith(selected, '720.mp4');
+});
+it('reports helper setup errors beside a completed card without changing download status or opening a picker', async () => {
+  const destination = {
+    name: 'Configured folder',
+    ...folder,
+  } as unknown as FileSystemDirectoryHandle;
+  vi.mocked(loadDirectory).mockImplementation(async (key = 'directory') =>
+    key === 'directory' ? destination : null
+  );
+  stored[`download_completed:${currentUrl}`] = { video: true, transcript: true };
+  vi.mocked(revealFile).mockRejectedValueOnce(new Error('Finder helper is not installed.'));
+  const picker = vi.fn();
+  vi.stubGlobal('showOpenFilePicker', picker);
+  await render();
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Open file location"]')!.click()
+  );
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(container.textContent).toContain('Finder helper is not installed');
+  expect(container.textContent).not.toContain('Failed ·');
+  expect(picker).not.toHaveBeenCalled();
+});
+it('connects a folder only through the Settings setup action and displays its own installation ID', async () => {
+  const destination = {
+    name: 'Configured folder',
+    ...folder,
+  } as unknown as FileSystemDirectoryHandle;
+  vi.mocked(loadDirectory).mockImplementation(async (key = 'directory') =>
+    key === 'directory' ? destination : null
+  );
+  await render('settings');
+  expect(connectFolder).not.toHaveBeenCalled();
+  expect(container.querySelector('.te-helper-command')?.textContent).toContain(
+    'lgjchnenkgchhcbkbfbakpejkkagjlfc'
+  );
+  await click('Connect folder to Finder');
+  expect(connectFolder).toHaveBeenCalledExactlyOnceWith(destination);
+  expect(container.textContent).toContain('Folder connected');
   expect(Object.keys(writes)).toHaveLength(0);
 });
 it('keeps the location action visible with a Settings hint when no folder is available', async () => {
   stored[`download_completed:${currentUrl}`] = { video: true, transcript: true };
   await render();
-  const button = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Browse configured folder"]'
-  )!;
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Open file location"]')!;
   expect(button).not.toBeNull();
   expect(button.disabled).toBe(true);
   expect(button.title).toContain('Choose a folder in Settings');

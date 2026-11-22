@@ -40,6 +40,7 @@ async function openStore(): Promise<IDBDatabase> {
 export interface SavedFile {
   directory: FileSystemDirectoryHandle;
   name: string;
+  selection?: string;
 }
 export async function recordFile(key: string, file: SavedFile): Promise<void> {
   const db = await openStore();

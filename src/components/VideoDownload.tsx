@@ -4,6 +4,7 @@ import { PROTOCOL_VERSION } from '../lib/hls-discovery';
 import { Trash2, X, Download, FolderOpen, Pencil } from 'lucide-react';
 import { Preview } from './Preview';
 import { deleteSaved } from '../lib/saved-files';
+import { connectFolder, revealFile } from '../lib/finder';
 import {
   HostAccessNeeded,
   SelectionUnavailable,
@@ -25,6 +26,7 @@ import {
   loadDirectory,
   saveDirectory,
   hasDirectoryAccess,
+  loadFiles,
 } from '../lib/preferences';
 import type { DownloadItem, Preferences } from '../lib/download-types';
 import { selectionKey } from '../lib/download-types';
@@ -93,6 +95,8 @@ export function VideoDownload({
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const [editing, setEditing] = useState<string>();
+  const [finderBusy, setFinderBusy] = useState(false);
+  const [finderNotice, setFinderNotice] = useState('');
   const [locations, setLocations] = useState<Record<string, FileSystemDirectoryHandle>>({});
   useEffect(() => {
     let disposed = false;
@@ -1343,39 +1347,6 @@ export function VideoDownload({
         {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
           <>
             <button
-              type="button"
-              className="te-text-button te-location-button"
-              aria-label={locations[item.id] ? 'Browse saved location' : 'Browse configured folder'}
-              title={
-                locations[item.id]
-                  ? 'Browse saved location'
-                  : directory
-                    ? 'Browse configured folder; the original location was not recorded'
-                    : 'Choose a folder in Settings to browse downloaded files'
-              }
-              disabled={!locations[item.id] && !directory}
-              onClick={() => {
-                const picker = (
-                  window as unknown as {
-                    showOpenFilePicker(options: {
-                      startIn: FileSystemDirectoryHandle;
-                    }): Promise<unknown>;
-                  }
-                ).showOpenFilePicker;
-                if (!picker) {
-                  setError('File browsing is unavailable in this browser.');
-                  return;
-                }
-                void picker
-                  .call(window, { startIn: locations[item.id] || directory! })
-                  .catch(err => {
-                    if (!(err instanceof DOMException && err.name === 'AbortError')) report(err);
-                  });
-              }}
-            >
-              <FolderOpen size={14} />
-            </button>
-            <button
               className="te-small-button"
               type="button"
               aria-label={`Remove downloaded item: ${item.title}`}
@@ -1449,6 +1420,47 @@ export function VideoDownload({
       </button>
     );
   }
+  function renderLocation(item: DownloadItem) {
+    return (
+      <button
+        type="button"
+        className="te-text-button te-location-button"
+        aria-label="Open file location"
+        title={
+          locations[item.id]
+            ? 'Show saved file in Finder'
+            : directory
+              ? 'Open configured folder in Finder; the original location was not recorded'
+              : 'Choose a folder in Settings to open downloaded files'
+        }
+        disabled={finderBusy || (!locations[item.id] && !directory)}
+        onClick={() =>
+          void (async () => {
+            setFinderBusy(true);
+            setFinderNotice('');
+            try {
+              const url = item.url || context?.url;
+              const files = url ? await loadFiles(completionKey(url)) : [];
+              const videos = [...files]
+                .reverse()
+                .filter(value => /\.(mp4|webm)$/i.test(value.name));
+              const file =
+                videos.find(value => value.selection === selectionKey(preferences)) ||
+                videos[0] ||
+                files.at(-1);
+              await revealFile(file?.directory || locations[item.id] || directory!, file?.name);
+            } catch (err) {
+              setFinderNotice(errorText(err));
+            } finally {
+              setFinderBusy(false);
+            }
+          })()
+        }
+      >
+        <FolderOpen size={14} />
+      </button>
+    );
+  }
   function renderLabel(item: DownloadItem) {
     const label =
       item.status === 'pending'
@@ -1460,6 +1472,7 @@ export function VideoDownload({
       <div className="te-status-line">
         <span className="te-preview-status te-muted">{label}</span>
         {single && item.status === 'downloading' && renderCancel()}
+        {(item.status === 'completed' || item.status === 'partial') && renderLocation(item)}
       </div>
     );
   }
@@ -1530,6 +1543,42 @@ export function VideoDownload({
         >
           {directory ? `Folder: ${directory.name} — change` : 'Choose destination folder'}
         </button>
+        <details className="te-finder-settings">
+          <summary>Open in Finder · macOS helper</summary>
+          <p className="te-muted text-xs">
+            Install once on this Mac, then connect the configured folder once. Opening a completed
+            file never opens a selection dialog.
+          </p>
+          <code className="te-helper-command">
+            npm run helper:install -- --extension-id {chrome.runtime.id}
+          </code>
+          <button
+            type="button"
+            className="te-btn"
+            disabled={!directory || busy || settingsLocked || finderBusy}
+            onClick={() =>
+              void (async () => {
+                setFinderBusy(true);
+                setFinderNotice('');
+                try {
+                  await connectFolder(directory!);
+                  setFinderNotice('Folder connected. Completed files can now open in Finder.');
+                } catch (err) {
+                  setFinderNotice(errorText(err));
+                } finally {
+                  setFinderBusy(false);
+                }
+              })()
+            }
+          >
+            Connect folder to Finder
+          </button>
+          {finderNotice && (
+            <p role="status" className="te-muted text-xs">
+              {finderNotice}
+            </p>
+          )}
+        </details>
         {!validChoice && <p role="alert">Choose video or transcript.</p>}
       </section>
       <section
@@ -1689,6 +1738,11 @@ export function VideoDownload({
             )}
           </div>
         </div>
+        {finderNotice && (
+          <p role="status" className="te-muted text-xs">
+            {finderNotice}
+          </p>
+        )}
         {!downloaded && (
           <div className="te-download-progress">
             {single?.status !== 'failed' && (progress.total > 0 || progress.bytes > 0) && (
