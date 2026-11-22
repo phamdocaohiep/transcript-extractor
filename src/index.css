@@ -417,8 +417,13 @@ body:not(.is-popup) #root {
 .te-download-card-body { flex: 1; min-width: 0; }
 .te-download-title { font-size: 12px; font-weight: 500; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px; }
 .te-download-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.te-download-toolbar .te-quality-picker { height: 32px; width: auto; flex: 1 1 100px; min-width: 0; max-width: 200px; border-radius: 8px; padding: 0 6px; font-size: 12px; }
-.te-btn-primary.te-download-button { height: 32px; min-height: 32px; padding: 0 10px; gap: 5px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
+.te-download-toolbar .te-quality-picker { height: 28px; width: auto; flex: 1 1 90px; min-width: 0; max-width: 180px; border-radius: 8px; padding: 0 5px; font-size: 11px; }
+.te-btn-primary.te-download-button { height: 28px; min-height: 28px; padding: 0 8px; gap: 4px; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
+.te-preview-column { flex: 0 0 96px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.te-preview-status { font-size: 10px; line-height: 1.3; }
+.te-download-progress { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 11px; }
+.te-download-progress:empty { display: none; }
+.te-download-progress progress { height: 4px; display: block; }
 .te-card-status { font-size: 11px; margin-top: 6px; }
 .te-text-button { align-self: flex-start; font-size: 11px; color: var(--te-text-2); text-decoration: underline; }
 .te-text-button:disabled { opacity: .5; }
@@ -428,6 +433,7 @@ body:not(.is-popup) #root {
 @media (max-width: 380px) {
   .te-download-card-head .te-preview { flex-basis: 72px; width: 72px; height: 52px; }
   .te-download-card-head { gap: 8px; padding-right: 16px; }
+  .te-download-card-head .te-preview-column { flex-basis: 72px; }
   .te-download-toolbar { gap: 4px; }
   .te-download-toolbar .te-quality-picker { flex-basis: 70px; }
 }

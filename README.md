@@ -188,6 +188,10 @@ concurrently, checked against the advertised duration, and combined using the sa
 Track types are recognized from MIME metadata even when optional quality labels are absent.
 If a saved format or resolution is unavailable but Auto has a compatible pair, the error offers
 the small **Retry** action to reset quality to Auto and try again. Missing tracks are reported separately.
+Format discovery reads up to three snapshots when no usable quality appears. The explicit **Detect available
+qualities** action can reload once before its final attempt only when automatic reload is enabled in Settings.
+It never reloads during a download. Progress, combining details and Cancel stay inside the source card;
+the state label appears below its thumbnail.
 
 This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,
 or run the Python/Node/FFmpeg backend used by a desktop downloader. If the player's current session cannot

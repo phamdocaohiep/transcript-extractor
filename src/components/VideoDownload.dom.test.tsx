@@ -238,6 +238,156 @@ it('shows a single video directly with selection on its preview and no duplicate
   expect(container.querySelectorAll('.te-download-button')).toHaveLength(1);
   expect(container.querySelector('.te-item-details')).toBeNull();
   expect(container.querySelector('.te-download-card-head input[type="checkbox"]')).toBeNull();
+  expect(container.querySelector('.te-preview-column .te-preview-status')?.textContent).toBe(
+    'Ready'
+  );
+});
+it.each([
+  { reload: false, ready: true },
+  { reload: true, ready: true },
+  { reload: false, ready: false },
+])('retries missing format discovery at most three times %j', async ({ reload, ready }) => {
+  vi.useFakeTimers();
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    reload,
+  });
+  let reads = 0;
+  vi.mocked(fetch).mockImplementation(async () => {
+    reads++;
+    return new Response(
+      ready && reads === 3
+        ? '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n720.m3u8'
+        : '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",URI="a.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO="a"\nv.m3u8'
+    );
+  });
+  await render();
+  expect(reads).toBe(0);
+  await click('Detect available qualities');
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1500);
+  });
+  expect(reads).toBe(3);
+  expect(chrome.tabs.reload).toHaveBeenCalledTimes(reload ? 1 : 0);
+  const options = [...container.querySelectorAll('select[aria-label="Video quality"] option')].map(
+    option => option.textContent
+  );
+  expect(options.includes('MP4 · 720p')).toBe(ready);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+  expect(reads).toBe(3);
+  expect(chrome.tabs.update).not.toHaveBeenCalled();
+});
+it('reads fresh YouTube metadata when formats arrive after the initial snapshot', async () => {
+  vi.useFakeTimers();
+  currentUrl = 'https://www.youtube.com/watch?v=example';
+  listing = [{ id: 'example', title: 'Example', url: currentUrl }];
+  hasSources = false;
+  let ready = false;
+  Object.assign(chrome, {
+    scripting: {
+      executeScript: vi.fn(async () => [
+        {
+          result: {
+            url: currentUrl,
+            streams: ready
+              ? [
+                  {
+                    url: 'https://cdn.test/video.mp4',
+                    mimeType: 'video/mp4; codecs="avc1, mp4a.40.2"',
+                    video: true,
+                    audio: true,
+                    height: 720,
+                    bitrate: 1000,
+                  },
+                ]
+              : [],
+          },
+        },
+      ]),
+    },
+  });
+  await render();
+  expect(container.querySelector('option[value="mp4:720"]')).toBeNull();
+  ready = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1500);
+  });
+  expect(container.querySelector('option[value="mp4:720"]')).not.toBeNull();
+  const reads = vi.mocked(chrome.scripting.executeScript).mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5000);
+  });
+  expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(reads);
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(chrome.tabs.update).not.toHaveBeenCalled();
+  expect(
+    vi
+      .mocked(chrome.tabs.sendMessage)
+      .mock.calls.some(call => (call[1] as { type: string }).type === 'PREPARE_DOWNLOAD')
+  ).toBe(false);
+});
+it('keeps progress, combining details and cancellation inside the source card', async () => {
+  const { saveTracks } = await import('../lib/track-file');
+  currentUrl = 'https://www.youtube.com/watch?v=example';
+  listing = [{ id: 'example', title: 'Example', url: currentUrl }];
+  hasSources = false;
+  Object.assign(chrome, {
+    scripting: {
+      executeScript: vi.fn(async () => [
+        {
+          result: {
+            url: currentUrl,
+            streams: [
+              {
+                url: 'https://cdn.test/video.mp4',
+                mimeType: 'video/mp4; codecs="avc1, mp4a.40.2"',
+                video: true,
+                audio: true,
+                height: 720,
+                bitrate: 1000,
+              },
+            ],
+          },
+        },
+      ]),
+    },
+  });
+  let finish: (() => void) | undefined;
+  vi.mocked(saveTracks).mockImplementationOnce(
+    async (_plan, _fetch, destination, _signal, progress, notice) => {
+      progress(2, 2, 1048576);
+      notice('Combining video and audio into MP4…');
+      await new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      await destination.write(new Uint8Array([1, 2, 3]));
+    }
+  );
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  const card = container.querySelector('.te-download-card')!;
+  expect(card.querySelector('.te-preview-column .te-preview-status')?.textContent).toBe(
+    'Downloading'
+  );
+  expect(card.querySelector('progress')?.value).toBe(2);
+  expect(card.querySelector('.te-download-progress')?.textContent).toContain('1.0 MB downloaded');
+  expect(card.querySelector('.te-download-progress [role="status"]')?.textContent).toContain(
+    'Combining video'
+  );
+  expect([...card.querySelectorAll('button')].some(button => button.textContent === 'Cancel')).toBe(
+    true
+  );
+  expect(container.querySelector('main > [role="status"]')).toBeNull();
+  expect(container.querySelector('main > progress')).toBeNull();
+  expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  await act(async () => finish!());
+  expect(card.querySelector('.te-preview-status')?.textContent).toBe('Completed');
+  expect(card.querySelector('progress')).toBeNull();
 });
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
@@ -1155,7 +1305,7 @@ it('does not start an automatic retry immediately after a manual download fails'
   await act(async () => {
     await vi.advanceTimersByTimeAsync(22000);
   });
-  expect(container.querySelector('.te-item-status')?.textContent).toContain('failed');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Failed');
   const download = [...container.querySelectorAll('button')].find(
     button => button.textContent === 'Retry'
   )!;

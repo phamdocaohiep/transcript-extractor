@@ -104,12 +104,14 @@ export function VideoDownload({
   const resetSelection = useRef(false);
   const listedGroup = useRef('');
   useEffect(() => {
-    if (!context || !preferences.video) return;
+    if (!context || !preferences.video || sourceClosed) return;
     const abort = new AbortController();
+    qualityController.current?.abort();
+    qualityController.current = abort;
     setRenditions([]);
     setQualityNotice('');
     setQualityLoading(false);
-    void inspectVideo(context, abort.signal)
+    void loadRenditions(context, abort.signal)
       .then(value => {
         if (!abort.signal.aborted) setRenditions(value);
       })
@@ -123,7 +125,9 @@ export function VideoDownload({
       abort.abort();
       qualityController.current?.abort();
     };
-  }, [context, preferences.video]);
+    // Discovery reads fresh snapshots without changing the queue's source context.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context, preferences.video, sourceClosed]);
   const [busy, setBusy] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const closed = useRef(sourceClosed);
@@ -239,6 +243,43 @@ export function VideoDownload({
         };
     }
     return next;
+  }
+  async function loadRenditions(
+    initial: VideoDownloadContext,
+    signal: AbortSignal,
+    readManifest = false
+  ): Promise<Rendition[]> {
+    if (initial.protected || initial.kind === 'quiz' || initial.kind === 'article') return [];
+    let current = initial;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      signal.throwIfAborted();
+      if (closed.current) return [];
+      try {
+        if (attempt) {
+          // Never reload or navigate a source while its download owns the tab.
+          if (working.current) return [];
+          current = await pageContext();
+          signal.throwIfAborted();
+          if (working.current || closed.current) return [];
+          if (lectureId(current.url, '') !== lectureId(initial.url, '')) return [];
+          if (attempt === 2 && readManifest && settings.current.reload) {
+            await chrome.tabs.reload(tabId);
+            current = await waitForContext(signal, initial.url);
+          }
+          signal.throwIfAborted();
+          if (lectureId(current.url, '') !== lectureId(initial.url, '')) return [];
+        }
+        const value = await inspectVideo(current, signal, readManifest);
+        if (value.length) return value;
+        // HLS manifests are fetched only through the explicit Detect action.
+        if (!readManifest && !current.streams && !current.adaptive) return [];
+      } catch (err) {
+        signal.throwIfAborted();
+        if (attempt === 2) throw err;
+      }
+      if (attempt < 2) await sleep(signal);
+    }
+    return [];
   }
   async function waitForContext(
     signal: AbortSignal,
@@ -1162,8 +1203,10 @@ export function VideoDownload({
       </button>
     );
   }
-  function renderStatus(item: DownloadItem, compact = false) {
+  function renderStatus(item: DownloadItem, compact = false, detailsOnly = false) {
     const saved = getSaved(item, preferences);
+    const showLabel = !detailsOnly || (compact && (saved.video || saved.transcript));
+    if (!showLabel && !item.error && !saved.video && !saved.transcript) return null;
     const label = compact
       ? saved.video
         ? saved.transcript
@@ -1179,11 +1222,13 @@ export function VideoDownload({
         : item.status;
     return (
       <div className="te-item-status">
-        <span className="te-muted text-sm" title={item.error}>
-          {' '}
-          {compact ? '' : '— '}
-          {label}
-        </span>
+        {showLabel && (
+          <span className="te-muted text-sm" title={item.error}>
+            {' '}
+            {compact ? '' : '— '}
+            {label}
+          </span>
+        )}
         {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
           <button
             className="te-small-button"
@@ -1203,11 +1248,23 @@ export function VideoDownload({
           </button>
         )}
         {item.error && (!compact || !saved.video) && (
-          <span className="te-muted text-sm"> · {item.error}</span>
+          <span className="te-muted text-sm">
+            {showLabel ? ' · ' : ''}
+            {item.error}
+          </span>
         )}
         {compact && item.status === 'failed' && !saved.video && renderRetry()}
       </div>
     );
+  }
+  function renderLabel(item: DownloadItem) {
+    const label =
+      item.status === 'pending'
+        ? 'Ready'
+        : item.status === 'partial'
+          ? 'Completed'
+          : item.status[0].toUpperCase() + item.status.slice(1);
+    return <span className="te-preview-status te-muted">{label}</span>;
   }
   return (
     <main className="flex flex-col gap-3">
@@ -1284,35 +1341,47 @@ export function VideoDownload({
           </button>
         )}
         <div className="te-download-card-head">
-          <label className="te-preview-selection">
-            <Preview
-              url={
-                items.find(item => item.url === context?.url)?.url ||
-                items.find(item => item.selected)?.url ||
-                context?.url
-              }
-              thumbnail={context?.thumbnail}
-              title={title || context?.title || 'Video'}
-            />
-            {items.length > 1 && (
-              <input
-                type="checkbox"
-                className="te-preview-checkbox"
-                aria-label={single ? `Select ${single.title}` : `Select all (${eligible.length})`}
-                disabled={busy || !eligible.length}
-                checked={!!eligible.length && eligible.every(item => item.selected)}
-                onChange={event =>
-                  void persistItems(
-                    items.map(item => ({
-                      ...item,
-                      selected: item.available !== false && event.target.checked,
-                    })),
-                    context!.url
-                  ).catch(report)
+          <div className="te-preview-column">
+            <label className="te-preview-selection">
+              <Preview
+                url={
+                  items.find(item => item.url === context?.url)?.url ||
+                  items.find(item => item.selected)?.url ||
+                  context?.url
                 }
+                thumbnail={context?.thumbnail}
+                title={title || context?.title || 'Video'}
               />
+              {items.length > 1 && (
+                <input
+                  type="checkbox"
+                  className="te-preview-checkbox"
+                  aria-label={single ? `Select ${single.title}` : `Select all (${eligible.length})`}
+                  disabled={busy || !eligible.length}
+                  checked={!!eligible.length && eligible.every(item => item.selected)}
+                  onChange={event =>
+                    void persistItems(
+                      items.map(item => ({
+                        ...item,
+                        selected: item.available !== false && event.target.checked,
+                      })),
+                      context!.url
+                    ).catch(report)
+                  }
+                />
+              )}
+            </label>
+            {single && renderLabel(single)}
+            {!single && (
+              <span className="te-preview-status te-muted">
+                {busy
+                  ? 'Downloading'
+                  : counts.total > 0 && counts.saved === counts.total
+                    ? 'Completed'
+                    : 'Ready'}
+              </span>
             )}
-          </label>
+          </div>
           <div className="te-download-card-body">
             <h2 className="te-download-title" title={single?.title || title || context?.title}>
               {single?.title || title || context?.title || 'Connect to a video'}
@@ -1381,7 +1450,7 @@ export function VideoDownload({
                   </button>
                 </div>
               )}
-            {single && renderStatus(single, true)}
+            {single && renderStatus(single, true, true)}
             {error && error !== single?.error && !(single && listFailed) && (
               <div className="te-item-status" role="alert">
                 <span>Failed · {error}</span>
@@ -1406,21 +1475,54 @@ export function VideoDownload({
             )}
           </div>
         </div>
+        {!downloaded && (
+          <div className="te-download-progress">
+            {single?.status !== 'failed' && (progress.total > 0 || progress.bytes > 0) && (
+              <>
+                {progress.total > 0 && (
+                  <progress
+                    aria-label="Download progress"
+                    className="w-full"
+                    value={progress.completed}
+                    max={progress.total}
+                  />
+                )}
+                <span className="te-muted">
+                  {progress.total ? `${progress.completed}/${progress.total} parts · ` : ''}
+                  {(progress.bytes / 1048576).toFixed(1)} MB downloaded
+                </span>
+              </>
+            )}
+            {notice &&
+              !(single && notice.startsWith('Finished:')) &&
+              !/^Downloading\b/i.test(notice) && (
+                <span role="status" className="te-muted">
+                  {notice}
+                </span>
+              )}
+            {busy && (
+              <button className="te-text-button" onClick={() => controller.current?.abort()}>
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
         {!downloaded &&
         single?.status !== 'failed' &&
         !sourceClosed &&
         preferences.video &&
-        context?.sources.length &&
+        !!context &&
         !renditions.length ? (
           <button
             type="button"
             className="te-text-button"
             disabled={busy || settingsLocked || qualityLoading}
             onClick={() => {
+              qualityController.current?.abort();
               const abort = new AbortController();
               qualityController.current = abort;
               setQualityLoading(true);
-              void inspectVideo(context, abort.signal, true)
+              void loadRenditions(context, abort.signal, true)
                 .then(value => {
                   if (!abort.signal.aborted) setRenditions(value);
                 })
@@ -1466,33 +1568,36 @@ export function VideoDownload({
                       <h3 className="font-semibold mb-3">{item.section}</h3>
                     )}
                     <div className="te-item-row">
-                      <label className="te-preview-selection">
-                        <Preview
-                          url={item.url}
-                          thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
-                          title={item.title}
-                        />
-                        <input
-                          className="te-preview-checkbox"
-                          aria-label={`Select ${item.title}`}
-                          type="checkbox"
-                          disabled={busy || item.available === false}
-                          checked={item.selected}
-                          onChange={e =>
-                            void persistItems(
-                              items.map(value =>
-                                value.id === item.id
-                                  ? { ...value, selected: e.target.checked }
-                                  : value
-                              ),
-                              context!.url
-                            ).catch(report)
-                          }
-                        />
-                      </label>
+                      <div className="te-preview-column">
+                        <label className="te-preview-selection">
+                          <Preview
+                            url={item.url}
+                            thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
+                            title={item.title}
+                          />
+                          <input
+                            className="te-preview-checkbox"
+                            aria-label={`Select ${item.title}`}
+                            type="checkbox"
+                            disabled={busy || item.available === false}
+                            checked={item.selected}
+                            onChange={e =>
+                              void persistItems(
+                                items.map(value =>
+                                  value.id === item.id
+                                    ? { ...value, selected: e.target.checked }
+                                    : value
+                                ),
+                                context!.url
+                              ).catch(report)
+                            }
+                          />
+                        </label>
+                        {renderLabel(item)}
+                      </div>
                       <div className="te-item-copy">
                         <span className="te-item-title">{item.title}</span>
-                        {renderStatus(item)}
+                        {renderStatus(item, false, true)}
                       </div>
                     </div>
                   </li>
@@ -1545,27 +1650,6 @@ export function VideoDownload({
           </button>
         </div>
       </dialog>
-      {!downloaded && single?.status !== 'failed' && (progress.total > 0 || progress.bytes > 0) && (
-        <div>
-          {progress.total > 0 && (
-            <progress className="w-full" value={progress.completed} max={progress.total} />
-          )}
-          <p>
-            {progress.total ? `${progress.completed}/${progress.total} parts · ` : ''}
-            {(progress.bytes / 1048576).toFixed(1)} MB downloaded
-          </p>
-        </div>
-      )}
-      {busy && (
-        <button className="te-btn" onClick={() => controller.current?.abort()}>
-          Cancel
-        </button>
-      )}
-      {notice && !downloaded && !(single && notice.startsWith('Finished:')) && (
-        <p role="status" className="te-glass p-4">
-          {notice}
-        </p>
-      )}
       {error && screen === 'settings' && (
         <p role="alert" className="te-note te-note--warn p-4">
           {error}
