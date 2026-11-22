@@ -6,10 +6,18 @@ export async function loadPreferences(): Promise<Preferences> {
   const data = (await chrome.storage.local.get(PREFERENCES_KEY))[PREFERENCES_KEY] as
     | Partial<Preferences>
     | undefined;
+  const maxHeight = data?.maxHeight;
   return {
     video: typeof data?.video === 'boolean' ? data.video : true,
     transcript: typeof data?.transcript === 'boolean' ? data.transcript : true,
     automatic: typeof data?.automatic === 'boolean' ? data.automatic : false,
+    ...(data?.format === 'mp4' || data?.format === 'webm' ? { format: data.format } : {}),
+    ...(typeof maxHeight === 'number' &&
+    Number.isInteger(maxHeight) &&
+    maxHeight > 0 &&
+    maxHeight <= 8640
+      ? { maxHeight }
+      : {}),
   };
 }
 

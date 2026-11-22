@@ -269,6 +269,7 @@ class ContentScript {
             sources: this.hlsSources(),
             protected: Boolean(video?.mediaKeys),
             hasPlayer: Boolean(video),
+            thumbnail: video?.poster || document.querySelector<HTMLMetaElement>('meta[property="og:image"]')?.content,
             kind: /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
             loading: document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
           } });

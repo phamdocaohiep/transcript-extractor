@@ -168,6 +168,21 @@ it('automatically registers a new background video tab after its URL is ready', 
   expect(mounted.has(5)).toBe(true);
   expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
 });
+it('closes only the requested queue, keeps its source tab open and suppresses rediscovery until its URL changes', async () => {
+  await render();
+  await click('Start 1');
+  await click('Start 2');
+  const close = container.querySelector<HTMLButtonElement>('[aria-label="Close queue: Source 1"]')!;
+  await act(async () => close.click());
+  expect(stopped).toEqual([1]);
+  expect(mounted.has(2)).toBe(true);
+  expect(tabs.some(tab => tab.id === 1)).toBe(true);
+  await select(1);
+  expect(mounted.has(1)).toBe(false);
+  tabs[0].url = 'https://www.youtube.com/watch?v=new';
+  await act(async () => updated(1, { status: 'complete' }, { active: true }));
+  expect(mounted.has(1)).toBe(true);
+});
 it('keeps workers running when the main view is hidden for search or switched to settings', async () => {
   await render();
   await click('Start 1');

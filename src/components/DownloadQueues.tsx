@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
+import { groupKey } from '../lib/identity';
 import { VideoDownload, type QueueState } from './VideoDownload';
 
 interface Entry {
@@ -41,6 +43,8 @@ export function DownloadQueues({
   const [selected, setSelected] = useState<number>();
   const [states, setStates] = useState<Record<number, QueueState>>({});
   const [message, setMessage] = useState('');
+  const dismissed = useRef(new Map<number, string>());
+  const addresses = useRef(new Map<number, string>());
   const busy = Object.values(states).some(state => state.busy);
 
   const receive = useCallback((id: number, state: QueueState) => {
@@ -68,7 +72,14 @@ export function DownloadQueues({
         .query({ currentWindow: true })
         .then(tabs => {
           if (disposed || current !== revision) return;
-          const found = tabs.filter(tab => tab.id !== undefined && supports(tab.url));
+          for (const tab of tabs)
+            if (tab.id !== undefined && tab.url) addresses.current.set(tab.id, groupKey(tab.url));
+          const found = tabs.filter(
+            tab =>
+              tab.id !== undefined &&
+              supports(tab.url) &&
+              dismissed.current.get(tab.id) !== groupKey(tab.url)
+          );
           setEntries(previous => [
             ...previous,
             ...found
@@ -141,7 +152,7 @@ export function DownloadQueues({
                     ? 'Needs attention'
                     : 'Ready';
             return (
-              <li key={entry.id}>
+              <li key={entry.id} className="te-queue-entry">
                 <button
                   className="te-btn te-queue-button"
                   aria-current={selected === entry.id ? 'true' : undefined}
@@ -152,6 +163,25 @@ export function DownloadQueues({
                     Queue {index + 1} · {status}
                     {state?.total ? ` · ${state.saved}/${state.total} saved` : ''}
                   </span>
+                </button>
+                <button
+                  className="te-small-button te-queue-close"
+                  type="button"
+                  aria-label={`Close queue: ${state?.title || entry.title}`}
+                  title="Close queue; keep source tab and saved files"
+                  onClick={() => {
+                    dismissed.current.set(entry.id, addresses.current.get(entry.id) || '');
+                    const remaining = entries.filter(value => value.id !== entry.id);
+                    setEntries(remaining);
+                    setSelected(previous => (previous === entry.id ? remaining[0]?.id : previous));
+                    setStates(previous => {
+                      const next = { ...previous };
+                      delete next[entry.id];
+                      return next;
+                    });
+                  }}
+                >
+                  <X size={16} />
                 </button>
               </li>
             );

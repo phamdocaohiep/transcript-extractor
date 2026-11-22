@@ -1,5 +1,6 @@
 import type { FormatStream } from 'googlevideo/shared-types';
 import type { AdaptiveInfo, RequestState } from './playback-session';
+import type { Preferences } from './download-types';
 
 export interface StreamInfo {
   url: string;
@@ -212,13 +213,23 @@ export function readStreams(): {
 }
 
 /** Prefer AVC/AAC when exposed, without discarding AV1 or Opus playback formats. */
-export function selectStreams(streams: StreamInfo[]) {
+export function selectStreams(
+  streams: StreamInfo[],
+  choice: Pick<Preferences, 'format' | 'maxHeight'> = {}
+) {
   const ranked = [...streams].sort((a, b) => b.height - a.height || b.bitrate - a.bitrate);
   for (const family of ['mp4', 'webm']) {
+    if (choice.format && family !== choice.format) continue;
     const videos = ranked
-      .filter(stream => stream.video && stream.mimeType.startsWith(`video/${family}`))
+      .filter(
+        stream =>
+          stream.video &&
+          stream.mimeType.startsWith(`video/${family}`) &&
+          (!choice.maxHeight || !stream.height || stream.height <= choice.maxHeight)
+      )
       .sort(
         (a, b) =>
+          (choice.maxHeight ? b.height - a.height : 0) ||
           Number(/avc1|avc3/.test(b.mimeType)) - Number(/avc1|avc3/.test(a.mimeType)) ||
           b.height - a.height ||
           b.bitrate - a.bitrate

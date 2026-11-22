@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
+import { Trash2 } from 'lucide-react';
+import { Preview } from './Preview';
 import {
   HostAccessNeeded,
   prepareVideo,
   saveDownload,
   completionKey,
   getFolderName,
+  inspectVideo,
+  type Rendition,
 } from '../lib/download';
 import { lectureId } from '../lib/collection';
 import { loadCourseCollection } from '../lib/collection-store';
@@ -21,6 +25,7 @@ import {
   hasDirectoryAccess,
 } from '../lib/preferences';
 import type { DownloadItem, Preferences } from '../lib/download-types';
+import { selectionKey } from '../lib/download-types';
 import { getSaved, getCounts } from '../lib/result-state';
 import { startRun, classifyError, type Trace } from '../lib/diagnostics';
 
@@ -84,6 +89,32 @@ export function VideoDownload({
     unique: number;
   } | null>(null);
   const [listFailed, setListFailed] = useState(false);
+  const [renditions, setRenditions] = useState<Rendition[]>([]);
+  const [qualityNotice, setQualityNotice] = useState('');
+  const [qualityLoading, setQualityLoading] = useState(false);
+  const qualityController = useRef<AbortController | null>(null);
+  const removed = useRef(new Set<string>());
+  useEffect(() => {
+    if (!context || !preferences.video) return;
+    const abort = new AbortController();
+    setRenditions([]);
+    setQualityNotice('');
+    setQualityLoading(false);
+    void inspectVideo(context, abort.signal)
+      .then(value => {
+        if (!abort.signal.aborted) setRenditions(value);
+      })
+      .catch(() => {
+        if (!abort.signal.aborted)
+          setQualityNotice(
+            'Available qualities will appear when the player exposes them. Auto uses the source quality.'
+          );
+      });
+    return () => {
+      abort.abort();
+      qualityController.current?.abort();
+    };
+  }, [context, preferences.video]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -342,7 +373,14 @@ export function VideoDownload({
     try {
       await savePreferences(value);
       setPreferences(value);
-      setItems([]);
+      if (
+        value.video !== preferences.video ||
+        value.transcript !== preferences.transcript ||
+        selectionKey(value) !== selectionKey(preferences)
+      ) {
+        setItems([]);
+        removed.current.clear();
+      }
       automaticAttempt.current = '';
     } catch (err) {
       report(err);
@@ -359,7 +397,14 @@ export function VideoDownload({
     if (includeVideo && next.protected)
       throw new Error('This player uses DRM. Protected video is not supported.');
     const nextPlan = includeVideo
-      ? await prepareVideo(selected, signal, next.streams, next.adaptive, trace.current)
+      ? await prepareVideo(
+          selected,
+          signal,
+          next.streams,
+          next.adaptive,
+          trace.current,
+          preferences
+        )
       : null;
     let text = '';
     let warning = '';
@@ -570,7 +615,7 @@ export function VideoDownload({
     }
   }
   const legacyQueueKey = (url: string) =>
-    `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}`;
+    `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}${preferences.format || preferences.maxHeight ? `:quality:${selectionKey(preferences)}` : ''}`;
   const queueKey = (url: string) => `${legacyQueueKey(url)}:tab:${tabId}`;
   async function persistItems(value: DownloadItem[], url: string) {
     await chrome.storage.local.set({ [queueKey(url)]: value });
@@ -597,7 +642,9 @@ export function VideoDownload({
       setTitle(response.data?.title || context.title);
       const sections = Array.isArray(response.data?.sections) ? response.data.sections : [];
       const keys = sections.flatMap((section: { lectures?: Array<{ url?: string }> }) =>
-        (section.lectures || []).flatMap(item => (item.url ? [completionKey(item.url)] : []))
+        (section.lectures || []).flatMap(item =>
+          item.url ? [completionKey(item.url), completionKey(item.url, preferences)] : []
+        )
       );
       const completedFiles = keys.length ? await chrome.storage.local.get(keys) : {};
       const storedQueues = await chrome.storage.local.get([
@@ -618,13 +665,19 @@ export function VideoDownload({
             ? getSaved(previous, preferences)
             : { video: false, transcript: false };
           const completed = item.url
-            ? (completedFiles[completionKey(item.url)] as
+            ? (completedFiles[completionKey(item.url, preferences)] as
                 | { video?: boolean; transcript?: boolean }
                 | undefined)
             : undefined;
+          const shared = item.url
+            ? (completedFiles[completionKey(item.url)] as { transcript?: boolean } | undefined)
+            : undefined;
           const saved = {
             video: previousFiles.video || completed?.video === true,
-            transcript: previousFiles.transcript || completed?.transcript === true,
+            transcript:
+              previousFiles.transcript ||
+              completed?.transcript === true ||
+              shared?.transcript === true,
           };
           const complete =
             (preferences.video || preferences.transcript) &&
@@ -671,13 +724,14 @@ export function VideoDownload({
         );
       }
       if (!next.length) {
-        const key = completionKey(context.url);
-        const previous = (await chrome.storage.local.get(key))[key] as
-          | { video?: boolean; transcript?: boolean }
-          | undefined;
+        const key = completionKey(context.url, preferences);
+        const base = completionKey(context.url);
+        const marks = await chrome.storage.local.get([key, base]);
+        const shared = marks[base] as { transcript?: boolean } | undefined;
+        const previous = marks[key] as { video?: boolean; transcript?: boolean } | undefined;
         const saved = {
           video: previous?.video === true,
-          transcript: previous?.transcript === true,
+          transcript: previous?.transcript === true || shared?.transcript === true,
         };
         const complete =
           (!preferences.video || saved.video) && (!preferences.transcript || saved.transcript);
@@ -694,10 +748,13 @@ export function VideoDownload({
               : 'pending',
         });
       }
-      await persistItems(next, context.url);
+      const visibleItems = next.filter(
+        item => !removed.current.has(`${groupKey(context.url)}:${item.id}`)
+      );
+      await persistItems(visibleItems, context.url);
       const loadedCount = Number(response.data?.loadedItems) || next.length;
       const expectedCount = Number(response.data?.totalItems) || loadedCount;
-      setListSize({ loaded: loadedCount, expected: expectedCount, unique: next.length });
+      setListSize({ loaded: loadedCount, expected: expectedCount, unique: visibleItems.length });
       listingTrace('list_loaded', { loadedCount, expectedCount, uniqueCount: next.length });
       listingTrace('run_finished', {
         result: loadedCount < expectedCount ? 'partial' : 'completed',
@@ -795,7 +852,7 @@ export function VideoDownload({
               throw new Error('The source tab left this collection.');
             setContext(current);
             setSource(current.sources[0] || '');
-            automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}`;
+            automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
             trace.current('discovery', {
               source: /(^|\.)youtube\.com$/.test(new URL(current.url).hostname)
                 ? 'youtube'
@@ -865,7 +922,7 @@ export function VideoDownload({
   const loadedList = useRef('');
   useEffect(() => {
     if (!loaded || busy || !context) return;
-    const key = `${groupKey(context.url)}:${preferences.video}:${preferences.transcript}`;
+    const key = `${groupKey(context.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
     if (loadedList.current === key) return;
     loadedList.current = key;
     void loadItems();
@@ -892,12 +949,21 @@ export function VideoDownload({
           const address = new URL(next.url);
           if (/(^|\.)youtube\.com$/.test(address.hostname) && address.pathname === '/playlist')
             return;
-          const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}`;
+          const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
           if (automaticAttempt.current === key) return;
           automaticAttempt.current = key;
-          const completed = (await chrome.storage.local.get(completionKey(next.url)))[
-            completionKey(next.url)
-          ] as { video?: boolean; transcript?: boolean } | undefined;
+          const marks = await chrome.storage.local.get([
+            completionKey(next.url),
+            completionKey(next.url, preferences),
+          ]);
+          const selected = marks[completionKey(next.url, preferences)] as
+            | { video?: boolean; transcript?: boolean }
+            | undefined;
+          const shared = marks[completionKey(next.url)] as { transcript?: boolean } | undefined;
+          const completed = {
+            video: selected?.video,
+            transcript: selected?.transcript || shared?.transcript,
+          };
           if (
             (!preferences.video || completed?.video) &&
             (!preferences.transcript || completed?.transcript)
@@ -1023,6 +1089,103 @@ export function VideoDownload({
         className="te-glass p-5 flex flex-col gap-3"
       >
         <h2 className="font-semibold">{title || context?.title || 'Connect to a lecture'}</h2>
+        {context && !items.length && (
+          <Preview url={context.url} thumbnail={context.thumbnail} title={context.title} />
+        )}
+        {preferences.video && (
+          <div className="te-quality-controls">
+            <label>
+              Video format
+              <select
+                className="te-select"
+                aria-label="Video format"
+                value={preferences.format || 'auto'}
+                disabled={busy || settingsLocked}
+                onChange={event =>
+                  void changePreferences({
+                    ...preferences,
+                    format:
+                      event.target.value === 'auto'
+                        ? undefined
+                        : (event.target.value as 'mp4' | 'webm'),
+                  })
+                }
+              >
+                <option value="auto">Auto</option>
+                {[
+                  ...new Set([
+                    ...renditions.map(item => item.format),
+                    ...(preferences.format ? [preferences.format] : []),
+                  ]),
+                ].map(format => (
+                  <option key={format} value={format}>
+                    {format.toUpperCase()}
+                    {renditions.length && !renditions.some(item => item.format === format)
+                      ? ' (not available here)'
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Resolution
+              <select
+                className="te-select"
+                aria-label="Resolution"
+                value={preferences.maxHeight || 0}
+                disabled={busy || settingsLocked}
+                onChange={event =>
+                  void changePreferences({
+                    ...preferences,
+                    maxHeight: Number(event.target.value) || undefined,
+                  })
+                }
+              >
+                <option value="0">Auto / source quality</option>
+                {[
+                  ...new Set([
+                    ...renditions
+                      .filter(item => !preferences.format || item.format === preferences.format)
+                      .map(item => item.height),
+                    preferences.maxHeight || 0,
+                  ]),
+                ]
+                  .filter(Boolean)
+                  .sort((a, b) => b - a)
+                  .map(height => (
+                    <option key={height} value={height}>
+                      Up to {height}p
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
+            {context?.sources.length && !renditions.length ? (
+              <button
+                type="button"
+                className="te-btn"
+                disabled={busy || settingsLocked || qualityLoading}
+                onClick={() => {
+                  const abort = new AbortController();
+                  qualityController.current = abort;
+                  setQualityLoading(true);
+                  void inspectVideo(context, abort.signal, true)
+                    .then(value => {
+                      if (!abort.signal.aborted) setRenditions(value);
+                    })
+                    .catch(err => {
+                      if (!abort.signal.aborted) setQualityNotice(errorText(err));
+                    })
+                    .finally(() => {
+                      if (!abort.signal.aborted) setQualityLoading(false);
+                    });
+                }}
+              >
+                {qualityLoading ? 'Reading qualities…' : 'Detect available qualities'}
+              </button>
+            ) : null}
+          </div>
+        )}
         {listSize && listSize.expected !== listSize.unique && (
           <p className="te-muted text-sm">
             {listSize.loaded}/{listSize.expected} playlist entries loaded · {listSize.unique} unique
@@ -1071,6 +1234,11 @@ export function VideoDownload({
                   {item.section && (index === 0 || items[index - 1].section !== item.section) && (
                     <h3 className="font-semibold mb-3">{item.section}</h3>
                   )}
+                  <Preview
+                    url={item.url}
+                    thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
+                    title={item.title}
+                  />
                   <label>
                     <input
                       type="checkbox"
@@ -1090,8 +1258,27 @@ export function VideoDownload({
                   <span className="te-muted text-sm">
                     {' '}
                     — {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
-                    {item.error ? ` · ${item.error}` : ''}
                   </span>
+                  {(getSaved(item, preferences).video ||
+                    getSaved(item, preferences).transcript) && (
+                    <button
+                      className="te-small-button"
+                      type="button"
+                      aria-label={`Remove downloaded item: ${item.title}`}
+                      title="Remove from list; keep saved files"
+                      disabled={busy}
+                      onClick={() => {
+                        removed.current.add(`${groupKey(context!.url)}:${item.id}`);
+                        void persistItems(
+                          items.filter(value => value.id !== item.id),
+                          context!.url
+                        ).catch(report);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                  {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
                 </li>
               ))}
             </ul>
@@ -1115,6 +1302,7 @@ export function VideoDownload({
           className="te-btn-primary"
           disabled={
             busy ||
+            qualityLoading ||
             !context ||
             !validChoice ||
             !items.some(

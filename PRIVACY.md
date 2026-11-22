@@ -87,6 +87,7 @@ rest of the extension is unaffected.
 | Host access to `https://*/*` | Approve HTTPS source/CDN access at installation so new video hosts do not require repeated runtime permission prompts |
 
 The extension requests persistent access to all HTTPS websites at installation.
+Requested previews load source-page posters or YouTube thumbnails from their original image hosts.
 Automatic content scripts remain limited to Udemy, Coursera and YouTube. The broader
 network grant supports video/CDN requests for downloads you initiate and caption extraction
 you request on other pages. It does not enable automatic scripts on every website.

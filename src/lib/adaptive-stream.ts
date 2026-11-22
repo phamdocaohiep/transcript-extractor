@@ -4,6 +4,7 @@ import type { SabrFormat } from 'googlevideo/shared-types';
 import type { AdaptiveInfo } from './playback-session';
 import { selectStreams, type StreamInfo } from './stream-discovery';
 import { saveTracks } from './track-file';
+import type { Preferences } from './download-types';
 
 export interface AdaptivePlan {
   kind: 'adaptive';
@@ -13,7 +14,10 @@ export interface AdaptivePlan {
   extension: 'mp4' | 'webm';
 }
 
-export function selectAdaptive(session: AdaptiveInfo): AdaptivePlan | null {
+export function selectAdaptive(
+  session: AdaptiveInfo,
+  choice: Pick<Preferences, 'format' | 'maxHeight'> = {}
+): AdaptivePlan | null {
   const formats = session.formats
     .map(buildSabrFormat)
     .filter(format => !format.hasText && format.hasVideo !== format.hasAudio);
@@ -25,7 +29,7 @@ export function selectAdaptive(session: AdaptiveInfo): AdaptivePlan | null {
     height: format.height || 0,
     bitrate: format.bitrate,
   }));
-  const selected = selectStreams(candidates);
+  const selected = selectStreams(candidates, choice);
   if (!selected?.audio) return null;
   return {
     kind: 'adaptive',

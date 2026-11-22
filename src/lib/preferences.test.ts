@@ -33,6 +33,19 @@ it('restores the selected folder handle from a reopened database', async () => {
   await saveDirectory(handle);
   expect(await loadDirectory()).toEqual(handle);
 });
+it('persists quality preferences and ignores invalid values from stored settings', async () => {
+  await savePreferences({
+    video: true,
+    transcript: false,
+    automatic: false,
+    format: 'webm',
+    maxHeight: 1080,
+  });
+  expect(await loadPreferences()).toMatchObject({ format: 'webm', maxHeight: 1080 });
+  stored[PREFERENCES_KEY] = { format: 'mkv', maxHeight: -1 };
+  expect(await loadPreferences()).not.toHaveProperty('format');
+  expect(await loadPreferences()).not.toHaveProperty('maxHeight');
+});
 
 it('does not ask again for a folder whose permission is already granted', async () => {
   const { hasDirectoryAccess } = await import('./preferences');

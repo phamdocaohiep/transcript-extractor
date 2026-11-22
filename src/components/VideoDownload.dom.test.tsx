@@ -125,7 +125,7 @@ beforeEach(() => {
         return {
           success: true,
           data: {
-            protocolVersion: 3,
+            protocolVersion: 4,
             url: currentUrl,
             title: 'First lecture',
             sources: hasSources && !textPages.has(currentUrl) ? [videoUrl] : [],
@@ -198,6 +198,69 @@ async function click(label: string) {
   expect(button.disabled, label).toBe(false);
   await act(async () => button.click());
 }
+it('detects available HLS qualities and downloads the selected resolution', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (...args) =>
+    String(args[0]) === videoUrl
+      ? new Response(
+          '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n720.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1920x1080\n1080.m3u8'
+        )
+      : original(...args)
+  );
+  await render();
+  expect(fetch).not.toHaveBeenCalled();
+  await click('Detect available qualities');
+  const select = container.querySelector<HTMLSelectElement>('[aria-label="Resolution"]')!;
+  expect([...select.options].map(option => option.value)).toEqual(['0', '1080', '720']);
+  await act(async () => {
+    select.value = '720';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await click('Choose destination folder');
+  await click('Download');
+  expect(
+    vi.mocked(fetch).mock.calls.some(([url]) => String(url) === 'https://cdn.test/720.m3u8')
+  ).toBe(true);
+  expect(
+    vi.mocked(fetch).mock.calls.some(([url]) => String(url) === 'https://cdn.test/1080.m3u8')
+  ).toBe(false);
+  expect(container.textContent).toContain('1/1 videos saved');
+});
+it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  const remove = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Remove downloaded item: First lecture"]'
+  )!;
+  expect(remove).not.toBeNull();
+  await act(async () => remove.click());
+  expect(container.querySelectorAll('li input')).toHaveLength(0);
+  expect(folder.removeEntry).not.toHaveBeenCalled();
+  expect(stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1']).toEqual({
+    video: true,
+    transcript: true,
+  });
+});
+it('allows another quality to download while reusing the previously saved transcript', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    automatic: false,
+    maxHeight: 720,
+  });
+  const base = 'download_completed:https://www.udemy.com/course/test/learn/lecture/1';
+  stored[base] = { video: true, transcript: true };
+  await render();
+  expect(container.textContent).toContain('0/1 videos saved');
+  expect(container.textContent).toContain('1/1 transcripts saved');
+  await click('Choose destination folder');
+  await click('Download');
+  expect(Object.keys(writes)).toHaveLength(1);
+  expect(Object.keys(writes)[0]).toMatch(/\.mp4$/);
+  expect(stored[`${base}:quality:auto:720`]).toEqual({ video: true, transcript: true });
+  expect(stored[base]).toEqual({ video: true, transcript: true });
+});
 it('saves the video and transcript as a matching pair in the selected course folder', async () => {
   await render();
   await click('Choose destination folder');
@@ -1047,7 +1110,7 @@ it('restores already-saved artifacts even when the selected formats use a differ
   expect(button.disabled).toBe(true);
 });
 
-it.each([undefined, 2])(
+it.each([undefined, 2, 3])(
   'reloads stale page scripts with protocol %s after an extension update',
   async protocolVersion => {
     vi.mocked(chrome.tabs.sendMessage).mockImplementationOnce(async () => ({
@@ -1094,7 +1157,7 @@ function configureParallel() {
       return {
         success: true,
         data: {
-          protocolVersion: 3,
+          protocolVersion: 4,
           url: addresses[id],
           title: `Video ${id}`,
           sources: [`https://r${id}.googlevideo.com/index.m3u8`],

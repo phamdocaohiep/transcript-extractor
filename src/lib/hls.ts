@@ -13,6 +13,7 @@ export interface HlsVariant {
   bandwidth: number;
   label: string;
   externalAudio: boolean;
+  height?: number;
 }
 export type HlsPlaylist =
   | { kind: 'master'; variants: HlsVariant[] }
@@ -116,6 +117,7 @@ export function parseHls(text: string, base: string): HlsPlaylist {
       bandwidth: Number(a.BANDWIDTH) || 0,
       label: a.RESOLUTION || `${Math.round((Number(a.BANDWIDTH) || 0) / 1000)} kbps`,
       externalAudio: externalAudio.has(a.AUDIO),
+      ...(a.RESOLUTION?.match(/x(\d+)$/) ? { height: Number(a.RESOLUTION.split('x')[1]) } : {}),
     });
   }
   if (variants.length) return { kind: 'master', variants };
@@ -188,7 +190,8 @@ export function parseHls(text: string, base: string): HlsPlaylist {
 
 export async function resolveHls(
   url: string,
-  readText: (url: string) => Promise<string>
+  readText: (url: string) => Promise<string>,
+  maxHeight?: number
 ): Promise<HlsPlan> {
   const visited = new Set<string>();
   let current = hlsUrl(url);
@@ -198,11 +201,15 @@ export async function resolveHls(
     const playlist = parseHls(await readText(current), current);
     if (playlist.kind === 'media') return { ...playlist, playlistUrl: current };
     const variant = playlist.variants
-      .filter(v => !v.externalAudio)
-      .sort((a, b) => b.bandwidth - a.bandwidth)[0];
+      .filter(v => !v.externalAudio && (!maxHeight || !v.height || v.height <= maxHeight))
+      .sort(
+        (a, b) => (maxHeight ? (b.height || 0) - (a.height || 0) : 0) || b.bandwidth - a.bandwidth
+      )[0];
     if (!variant)
       throw new Error(
-        'This stream has separate audio and video tracks. Combining them requires a media remuxer.'
+        maxHeight
+          ? 'No supported video is available at or below the selected resolution.'
+          : 'This stream has separate audio and video tracks. Combining them requires a media remuxer.'
       );
     current = variant.url;
   }

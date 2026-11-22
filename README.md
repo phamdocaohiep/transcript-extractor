@@ -106,6 +106,18 @@ want to skip, then click **Download**. Completed items are skipped when resuming
 Video and transcript progress are counted separately. A saved video remains counted when its
 transcript is unavailable, including after reopening the panel. Retrying that partial item attempts
 the missing transcript without downloading its video again.
+The small trash button beside a saved item's status removes that row from the current list; it does
+not delete saved files. The close button at the top right of a queue stops and dismisses only that queue,
+leaving its source tab and saved files intact. It stays dismissed for that collection until the panel is reopened
+or the tab moves to another collection.
+
+Video rows show a preview when a YouTube thumbnail or source-page poster is available. **Video format**
+offers Auto and available MP4/WebM outputs. **Resolution** limits advertised renditions to the selected
+height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
+playlist without downloading media segments. A fixed-quality source stays at its original quality. These
+controls select existing streams; they do not transcode or upscale video. Unsupported selections fail clearly.
+Quality preferences are saved in the Chrome profile. Each quality selection has separate saved-video progress,
+so another quality can be downloaded while reusing a transcript already saved for that video.
 Configure the destination folder in Settings. If no folder has been configured, Download shows
 an error directing you to Settings. If the saved folder needs renewed access, Download opens
 Chrome's native permission dialog and continues immediately when access is granted.

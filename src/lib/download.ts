@@ -1,4 +1,12 @@
-import { hlsUrl, readHlsResponse, resolveHls, safeVideoName, writeHls, type HlsPlan } from './hls';
+import {
+  hlsUrl,
+  parseHls,
+  readHlsResponse,
+  resolveHls,
+  safeVideoName,
+  writeHls,
+  type HlsPlan,
+} from './hls';
 import { probeMediaFile, writeMediaFile } from './media-file';
 import { saveMp4 } from './mp4';
 import { selectStreams, type StreamInfo } from './stream-discovery';
@@ -7,12 +15,14 @@ import { selectAdaptive, saveAdaptive, type AdaptivePlan } from './adaptive-stre
 import type { AdaptiveInfo } from './playback-session';
 import type { VideoDownloadContext } from './hls-discovery';
 import type { Preferences } from './download-types';
+import { selectionKey } from './download-types';
 import { groupKey } from './identity';
 import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
 import { classifyError, type Trace } from './diagnostics';
 
-export const completionKey = (url: string) => `download_completed:${lectureId(url, '')}`;
+export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
+  `download_completed:${lectureId(url, '')}${choice && (choice.format || choice.maxHeight) ? `:quality:${selectionKey(choice)}` : ''}`;
 export function getFolderName(value: string) {
   const url = new URL(groupKey(value));
   const identifier =
@@ -110,11 +120,12 @@ export async function prepareVideo(
   signal: AbortSignal,
   streams?: StreamInfo[],
   adaptive?: AdaptiveInfo,
-  trace?: Trace
+  trace?: Trace,
+  choice: Pick<Preferences, 'format' | 'maxHeight'> = {}
 ): Promise<DownloadPlan> {
   signal.throwIfAborted();
   if (streams?.length) {
-    const selected = selectStreams(streams);
+    const selected = selectStreams(streams, choice);
     if (selected) {
       await checkHosts(
         [selected.video.url, ...(selected.audio ? [selected.audio.url] : [])],
@@ -127,9 +138,11 @@ export async function prepareVideo(
       });
       return { kind: 'tracks', ...selected };
     }
+    if (!adaptive && !source)
+      throw new Error('The selected format or resolution is not available for this video.');
   }
   if (adaptive) {
-    const plan = selectAdaptive(adaptive);
+    const plan = selectAdaptive(adaptive, choice);
     if (!plan) throw new Error('The player did not advertise compatible video and audio formats.');
     await checkHosts([adaptive.url], trace);
     trace?.('plan_ready', {
@@ -143,19 +156,24 @@ export async function prepareVideo(
     return plan;
   }
   const url = hlsUrl(source);
+  if (choice.format === 'webm')
+    throw new Error('This source provides MP4 output. Choose MP4 or Auto.');
   if (/\.mp4$/i.test(new URL(url).pathname)) {
     await probeMediaFile(await fetchVideo(url, signal, undefined, {}, trace), signal);
     trace?.('plan_ready', { protocol: 'file', extension: 'mp4' });
     return { kind: 'file', url, extension: 'mp4' };
   }
-  const plan = await resolveHls(url, async selected =>
-    new TextDecoder().decode(
-      await readHlsResponse(
-        await fetchVideo(selected, signal, undefined, {}, trace),
-        2 * 1024 * 1024,
-        signal
-      )
-    )
+  const plan = await resolveHls(
+    url,
+    async selected =>
+      new TextDecoder().decode(
+        await readHlsResponse(
+          await fetchVideo(selected, signal, undefined, {}, trace),
+          2 * 1024 * 1024,
+          signal
+        )
+      ),
+    choice.maxHeight
   );
   await checkHosts(
     plan.parts.flatMap(part => (part.key ? [part.url, part.key.url] : [part.url])),
@@ -163,6 +181,69 @@ export async function prepareVideo(
   );
   trace?.('plan_ready', { protocol: 'hls', extension: 'mp4', total: plan.parts.length });
   return plan;
+}
+
+export interface Rendition {
+  format: 'mp4' | 'webm';
+  height: number;
+}
+export async function inspectVideo(
+  context: VideoDownloadContext,
+  signal: AbortSignal,
+  readManifest = false
+): Promise<Rendition[]> {
+  if (context.protected || context.kind === 'quiz' || context.kind === 'article') return [];
+  const streams = context.streams || [];
+  const formats = context.adaptive?.formats || [];
+  const candidates = [
+    ...streams
+      .filter(stream => stream.video)
+      .map(stream => ({ mime: stream.mimeType, height: stream.height })),
+    ...formats
+      .filter(format => format.height)
+      .map(format => ({ mime: format.mimeType || '', height: format.height || 0 })),
+  ];
+  const found: Rendition[] = [];
+  for (const candidate of candidates) {
+    const format = candidate.mime.startsWith('video/mp4')
+      ? 'mp4'
+      : candidate.mime.startsWith('video/webm')
+        ? 'webm'
+        : undefined;
+    if (!format || found.some(item => item.format === format && item.height === candidate.height))
+      continue;
+    const choice: Pick<Preferences, 'format' | 'maxHeight'> = {
+      format,
+      maxHeight: candidate.height || undefined,
+    };
+    const direct = selectStreams(streams, choice);
+    const adaptive = context.adaptive ? selectAdaptive(context.adaptive, choice) : null;
+    if (
+      (direct?.video.height === candidate.height && direct.extension === format) ||
+      (adaptive?.video.height === candidate.height && adaptive.extension === format)
+    )
+      found.push({ format, height: candidate.height });
+  }
+  if (found.length || streams.length || context.adaptive)
+    return found.sort((a, b) => b.height - a.height);
+  const source = context.sources[0];
+  if (!source) return [];
+  if (/\.mp4$/i.test(new URL(source).pathname)) return [{ format: 'mp4', height: 0 }];
+  if (!readManifest) return [];
+  const response = await fetchVideo(source, signal);
+  const playlist = parseHls(
+    new TextDecoder().decode(await readHlsResponse(response, 2 * 1024 * 1024, signal)),
+    source
+  );
+  return playlist.kind === 'master'
+    ? [
+        ...new Set(
+          playlist.variants.filter(item => !item.externalAudio).map(item => item.height || 0)
+        ),
+      ]
+        .sort((a, b) => b - a)
+        .map(height => ({ format: 'mp4', height }))
+    : [{ format: 'mp4', height: 0 }];
 }
 
 export async function saveDownload(
@@ -275,14 +356,26 @@ export async function saveDownload(
   notice(
     `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} in ${directory.name}/${name}.`
   );
-  const key = completionKey(context.url);
-  const previous = (await chrome.storage.local.get(key))[key] as
-    | { video?: boolean; transcript?: boolean }
-    | undefined;
-  await chrome.storage.local.set({
-    [key]: {
-      video: preferences.video || previous?.video === true,
-      transcript: preferences.transcript || previous?.transcript === true,
-    },
+  const key = completionKey(context.url, preferences);
+  const sharedKey = completionKey(context.url);
+  await navigator.locks.request(`completion-${sharedKey}`, { mode: 'exclusive' }, async () => {
+    const stored = await chrome.storage.local.get([key, sharedKey]);
+    const previous = stored[key] as { video?: boolean; transcript?: boolean } | undefined;
+    const shared = stored[sharedKey] as { video?: boolean; transcript?: boolean } | undefined;
+    await chrome.storage.local.set({
+      [key]: {
+        video: preferences.video || previous?.video === true,
+        transcript:
+          preferences.transcript || previous?.transcript === true || shared?.transcript === true,
+      },
+      ...(key !== sharedKey
+        ? {
+            [sharedKey]: {
+              video: shared?.video === true,
+              transcript: preferences.transcript || shared?.transcript === true,
+            },
+          }
+        : {}),
+    });
   });
 }

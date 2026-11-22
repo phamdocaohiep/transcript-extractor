@@ -2,7 +2,11 @@ export interface Preferences {
   video: boolean;
   transcript: boolean;
   automatic: boolean;
+  format?: 'mp4' | 'webm';
+  maxHeight?: number;
 }
+export const selectionKey = (value: Pick<Preferences, 'format' | 'maxHeight'>) =>
+  `${value.format || 'auto'}:${value.maxHeight || 0}`;
 
 export interface DownloadItem {
   id: string;
