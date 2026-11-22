@@ -84,11 +84,20 @@ rest of the extension is unaffected.
 | `storage` | Save your preferences and collected transcripts on this device |
 | `unlimitedStorage` | Keep captured screenshots; the default 10 MB cap holds only a few |
 | `clipboardWrite` | Copy a transcript when you ask for it |
-| Host access to `udemy.com`, `coursera.org`, `youtube.com` | Read transcripts on those sites |
+| `downloads` | Save files in Chrome’s default download directory, show their location in Finder and delete files you explicitly remove |
+| Host access to `https://*/*` | Approve HTTPS source/CDN access at installation so new video hosts do not require repeated runtime permission prompts |
 
-The extension does **not** request persistent access to all websites. It runs
-automatically on the three listed platforms. When you explicitly invoke it on
-another page, `activeTab` allows an attempt to read standard HTML5 captions there.
+The extension requests persistent access to all HTTPS websites at installation.
+Requested previews load source-page posters or YouTube thumbnails from their original image hosts.
+Automatic content scripts remain limited to Udemy, Coursera and YouTube. The broader
+network grant supports video/CDN requests for downloads you initiate and caption extraction
+you request on other pages. It does not enable automatic scripts on every website.
+
+No native helper or native-messaging permission is used. New video/transcript files are handed to
+Chrome Downloads. Their Chrome download IDs and filenames are recorded locally so the extension can
+show their location and delete the corresponding files when you request it. Temporary remux output
+is staged on browser-owned disk and cleaned up. Legacy directory handles remain only for compatibility
+with older saved files. Download filenames and folder paths are not included in diagnostic exports.
 
 ---
 

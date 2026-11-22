@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Transcript Extractor",
-  "version": "4.3.0",
+  "version": "4.9.0",
   "description": "Extract lecture transcripts from any video site and export them as notes, subtitles, spreadsheets or retrieval-ready chunks.",
   "permissions": [
     "activeTab",
@@ -10,12 +10,11 @@
     "clipboardWrite",
     "scripting",
     "unlimitedStorage",
-    "sidePanel"
+    "sidePanel",
+    "downloads"
   ],
   "host_permissions": [
-    "https://*.udemy.com/*",
-    "https://*.coursera.org/*",
-    "https://*.youtube.com/*"
+    "https://*/*"
   ],
   "icons": {
     "16": "icons/icon16.png",
@@ -54,6 +53,16 @@
         "content-script.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.youtube.com/*"
+      ],
+      "js": [
+        "playback-observer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [
@@ -71,9 +80,6 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   },
-  "optional_host_permissions": [
-    "https://*/*"
-  ],
   "side_panel": {
     "default_path": "index.html"
   },

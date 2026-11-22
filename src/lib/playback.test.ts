@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { resolvePlayback } from './playback';
 import type { VideoDownloadContext } from './hls-discovery';
 const url = 'https://www.udemy.com/course/test/learn/lecture/1';
-const signal = () => new AbortController().signal;
 const context: VideoDownloadContext = {
   url,
   title: 'Video',
@@ -13,62 +12,56 @@ const context: VideoDownloadContext = {
 };
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
-it('reloads and primes a lazy player automatically when no stream appears', async () => {
+it('does not reload by default when the player has no downloadable stream', async () => {
+  const reload = vi.fn();
+  const pending = expect(
+    resolvePlayback(url, async () => context, reload, new AbortController().signal, vi.fn())
+  ).rejects.toThrow('Play the video manually');
+  await vi.runAllTimersAsync();
+  await pending;
+  expect(reload).not.toHaveBeenCalled();
+});
+it('reloads once only when explicitly enabled and reuses the newly exposed stream', async () => {
   let reloaded = false;
-  const prime = vi.fn(async () => undefined);
   const reload = vi.fn(async () => {
     reloaded = true;
   });
-  const read = vi.fn(async () => ({
-    ...context,
-    sources: reloaded ? ['https://cdn.test/video.m3u8'] : [],
-  }));
-  const pending = resolvePlayback(url, read, prime, reload, signal(), vi.fn());
+  const pending = resolvePlayback(
+    url,
+    async () => ({ ...context, sources: reloaded ? ['https://cdn.test/video.m3u8'] : [] }),
+    reload,
+    new AbortController().signal,
+    vi.fn(),
+    true
+  );
   await vi.runAllTimersAsync();
   expect((await pending).sources).toHaveLength(1);
   expect(reload).toHaveBeenCalledOnce();
-  expect(prime).toHaveBeenCalled();
 });
-it('identifies a settled text page without treating it as a broken player', async () => {
+it('identifies a text page without reloading', async () => {
   const reload = vi.fn();
-  const pending = resolvePlayback(
+  const result = await resolvePlayback(
     url,
-    async () => ({ ...context, hasPlayer: false, kind: 'article' as const }),
-    vi.fn(),
+    async () => ({ ...context, hasPlayer: false, kind: 'article' }),
     reload,
-    signal(),
+    new AbortController().signal,
     vi.fn()
   );
-  await vi.runAllTimersAsync();
-  expect((await pending).hasPlayer).toBe(false);
+  expect(result.hasPlayer).toBe(false);
   expect(reload).not.toHaveBeenCalled();
 });
-it('reports a player with no supported stream after a bounded reload retry', async () => {
-  const reload = vi.fn(async () => undefined);
-  const pending = expect(
-    resolvePlayback(
-      url,
-      async () => context,
-      vi.fn(async () => undefined),
-      reload,
-      signal(),
-      vi.fn()
-    )
-  ).rejects.toThrow('no supported HLS or MP4');
-  await vi.runAllTimersAsync();
-  await pending;
-  expect(reload).toHaveBeenCalledOnce();
-});
-it('stops recovery when the download is cancelled', async () => {
+it('stops observing when cancelled', async () => {
   const abort = new AbortController();
+  const reload = vi.fn();
   const pending = expect(
-    resolvePlayback(url, async () => context, vi.fn(), vi.fn(), abort.signal, vi.fn())
+    resolvePlayback(url, async () => context, reload, abort.signal, vi.fn(), true)
   ).rejects.toThrow();
   abort.abort();
   await vi.runAllTimersAsync();
   await pending;
+  expect(reload).not.toHaveBeenCalled();
 });
-it('waits for delayed hydration rather than skipping a video with no element yet', async () => {
+it('waits for delayed hydration without starting playback or reloading', async () => {
   let polls = 0;
   const reload = vi.fn();
   const pending = resolvePlayback(
@@ -79,34 +72,36 @@ it('waits for delayed hydration rather than skipping a video with no element yet
       hasPlayer: ++polls >= 8,
       sources: polls >= 8 ? ['https://cdn.test/video.m3u8'] : [],
     }),
-    vi.fn(async () => undefined),
     reload,
-    signal(),
+    new AbortController().signal,
     vi.fn()
   );
   await vi.runAllTimersAsync();
   expect((await pending).sources).toHaveLength(1);
   expect(reload).not.toHaveBeenCalled();
 });
-it('retries a missing video element after reload instead of persisting a skipped video', async () => {
-  let reloaded = false;
-  const reload = vi.fn(async () => {
-    reloaded = true;
-  });
-  const pending = resolvePlayback(
-    url,
-    async () => ({
-      ...context,
-      kind: 'video',
-      hasPlayer: reloaded,
-      sources: reloaded ? ['https://cdn.test/video.m3u8'] : [],
-    }),
-    vi.fn(async () => undefined),
-    reload,
-    signal(),
-    vi.fn()
-  );
+it('reports missing YouTube streams with manual playback guidance instead of starting the player', async () => {
+  const address = 'https://www.youtube.com/watch?v=example';
+  const reload = vi.fn();
+  const pending = expect(
+    resolvePlayback(
+      address,
+      async () => ({ ...context, url: address, streams: [] }),
+      reload,
+      new AbortController().signal,
+      vi.fn()
+    )
+  ).rejects.toThrow('Play the video manually');
   await vi.runAllTimersAsync();
-  expect((await pending).hasPlayer).toBe(true);
+  await pending;
+  expect(reload).not.toHaveBeenCalled();
+});
+it('bounds an opted-in reload retry when the stream remains unavailable', async () => {
+  const reload = vi.fn();
+  const pending = expect(
+    resolvePlayback(url, async () => context, reload, new AbortController().signal, vi.fn(), true)
+  ).rejects.toThrow('no supported HLS or MP4');
+  await vi.runAllTimersAsync();
+  await pending;
   expect(reload).toHaveBeenCalledOnce();
 });

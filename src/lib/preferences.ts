@@ -6,10 +6,20 @@ export async function loadPreferences(): Promise<Preferences> {
   const data = (await chrome.storage.local.get(PREFERENCES_KEY))[PREFERENCES_KEY] as
     | Partial<Preferences>
     | undefined;
+  const maxHeight = data?.maxHeight;
   return {
     video: typeof data?.video === 'boolean' ? data.video : true,
     transcript: typeof data?.transcript === 'boolean' ? data.transcript : true,
     automatic: typeof data?.automatic === 'boolean' ? data.automatic : false,
+    ...(data?.deleteFiles === true ? { deleteFiles: true } : {}),
+    ...(data?.reload === true ? { reload: true } : {}),
+    ...(data?.format === 'mp4' || data?.format === 'webm' ? { format: data.format } : {}),
+    ...(typeof maxHeight === 'number' &&
+    Number.isInteger(maxHeight) &&
+    maxHeight > 0 &&
+    maxHeight <= 8640
+      ? { maxHeight }
+      : {}),
   };
 }
 
@@ -27,12 +37,46 @@ async function openStore(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveDirectory(value: FileSystemDirectoryHandle): Promise<void> {
+export interface SavedFile {
+  directory?: FileSystemDirectoryHandle;
+  downloadId?: number;
+  name: string;
+  selection?: string;
+}
+export async function recordFile(key: string, file: SavedFile): Promise<void> {
   const db = await openStore();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction('values', 'readwrite');
-      tx.objectStore('values').put(value, 'directory');
+      const store = tx.objectStore('values');
+      const request = store.get(`files:${key}`);
+      request.onsuccess = () => store.put([...(request.result || []), file], `files:${key}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+export async function loadFiles(key: string): Promise<SavedFile[]> {
+  const db = await openStore();
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction('values').objectStore('values').get(`files:${key}`);
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+export async function clearFiles(key: string): Promise<void> {
+  const db = await openStore();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('values', 'readwrite');
+      tx.objectStore('values').delete(`files:${key}`);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
@@ -42,11 +86,29 @@ export async function saveDirectory(value: FileSystemDirectoryHandle): Promise<v
   }
 }
 
-export async function loadDirectory(): Promise<FileSystemDirectoryHandle | null> {
+export async function saveDirectory(
+  value: FileSystemDirectoryHandle,
+  key = 'directory'
+): Promise<void> {
+  const db = await openStore();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('values', 'readwrite');
+      tx.objectStore('values').put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function loadDirectory(key = 'directory'): Promise<FileSystemDirectoryHandle | null> {
   const db = await openStore();
   try {
     return await new Promise((resolve, reject) => {
-      const request = db.transaction('values').objectStore('values').get('directory');
+      const request = db.transaction('values').objectStore('values').get(key);
       request.onsuccess = () => resolve(request.result ?? null);
       request.onerror = () => reject(request.error);
     });
@@ -57,12 +119,15 @@ export async function loadDirectory(): Promise<FileSystemDirectoryHandle | null>
 
 export async function hasDirectoryAccess(
   directory: FileSystemDirectoryHandle,
-  request = false
+  request = false,
+  onRequest?: () => void
 ): Promise<boolean> {
   const handle = directory as FileSystemDirectoryHandle & {
     queryPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
     requestPermission(options: { mode: 'readwrite' }): Promise<PermissionState>;
   };
-  if (request) return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted';
-  return (await handle.queryPermission({ mode: 'readwrite' })) === 'granted';
+  if ((await handle.queryPermission({ mode: 'readwrite' })) === 'granted') return true;
+  if (!request) return false;
+  onRequest?.();
+  return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted';
 }

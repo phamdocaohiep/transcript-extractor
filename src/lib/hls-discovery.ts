@@ -1,3 +1,7 @@
+import type { StreamInfo } from './stream-discovery';
+import type { AdaptiveInfo } from './playback-session';
+export const PROTOCOL_VERSION = 4;
+
 export interface VideoDownloadContext {
   url: string;
   title: string;
@@ -6,6 +10,11 @@ export interface VideoDownloadContext {
   hasPlayer?: boolean;
   loading?: boolean;
   kind?: 'video' | 'quiz' | 'article';
+  streams?: StreamInfo[];
+  unavailable?: string;
+  adaptive?: AdaptiveInfo;
+  diagnostics?: string;
+  thumbnail?: string;
 }
 
 /** Observe only resource URLs already requested by this lecture page. */

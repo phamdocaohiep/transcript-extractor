@@ -6,6 +6,9 @@ import {
   saveDirectory,
   loadDirectory,
   PREFERENCES_KEY,
+  recordFile,
+  loadFiles,
+  clearFiles,
 } from './preferences';
 let stored: Record<string, unknown>;
 beforeEach(() => {
@@ -32,4 +35,78 @@ it('restores the selected folder handle from a reopened database', async () => {
   const handle = { kind: 'directory', name: 'Saved downloads' } as FileSystemDirectoryHandle;
   await saveDirectory(handle);
   expect(await loadDirectory()).toEqual(handle);
+});
+it('records related filenames and directories across reopened databases', async () => {
+  const directory = { kind: 'directory', name: 'Files' } as FileSystemDirectoryHandle;
+  await Promise.all([
+    recordFile('test-files', { directory, name: 'one.mp4' }),
+    recordFile('test-files', { directory, name: 'one.md' }),
+  ]);
+  expect((await loadFiles('test-files')).map(file => file.name).sort()).toEqual([
+    'one.md',
+    'one.mp4',
+  ]);
+  await clearFiles('test-files');
+  expect(await loadFiles('test-files')).toEqual([]);
+  await savePreferences({ video: true, transcript: true, automatic: false, deleteFiles: true });
+  expect((await loadPreferences()).deleteFiles).toBe(true);
+});
+it('keeps saved file locations separate from later destination changes', async () => {
+  const first = { kind: 'directory', name: 'First' } as FileSystemDirectoryHandle;
+  const second = { kind: 'directory', name: 'Second' } as FileSystemDirectoryHandle;
+  await saveDirectory(first, 'location:example');
+  await saveDirectory(second);
+  expect(await loadDirectory('location:example')).toEqual(first);
+  expect(await loadDirectory()).toEqual(second);
+});
+it('persists quality preferences and ignores invalid values from stored settings', async () => {
+  await savePreferences({
+    video: true,
+    transcript: false,
+    automatic: false,
+    format: 'webm',
+    maxHeight: 1080,
+  });
+  expect(await loadPreferences()).toMatchObject({ format: 'webm', maxHeight: 1080 });
+  stored[PREFERENCES_KEY] = { format: 'mkv', maxHeight: -1 };
+  expect(await loadPreferences()).not.toHaveProperty('format');
+  expect(await loadPreferences()).not.toHaveProperty('maxHeight');
+});
+it('keeps automatic reload off unless explicitly enabled and persists that choice', async () => {
+  expect((await loadPreferences()).reload).not.toBe(true);
+  await savePreferences({ video: true, transcript: true, automatic: false, reload: true });
+  expect((await loadPreferences()).reload).toBe(true);
+  await savePreferences({ video: true, transcript: true, automatic: false, reload: false });
+  expect((await loadPreferences()).reload).not.toBe(true);
+});
+
+it('does not ask again for a folder whose permission is already granted', async () => {
+  const { hasDirectoryAccess } = await import('./preferences');
+  const handle = { queryPermission: vi.fn(async () => 'granted'), requestPermission: vi.fn() };
+  const requested = vi.fn();
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(handle.requestPermission).not.toHaveBeenCalled();
+  expect(requested).not.toHaveBeenCalled();
+});
+it('requests folder access once and reuses the browser grant on subsequent checks', async () => {
+  const { hasDirectoryAccess } = await import('./preferences');
+  let granted = false;
+  const handle = {
+    queryPermission: vi.fn(async () => (granted ? 'granted' : 'prompt')),
+    requestPermission: vi.fn(async () => {
+      granted = true;
+      return 'granted';
+    }),
+  };
+  const requested = vi.fn();
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(
+    await hasDirectoryAccess(handle as unknown as FileSystemDirectoryHandle, true, requested)
+  ).toBe(true);
+  expect(handle.requestPermission).toHaveBeenCalledOnce();
+  expect(requested).toHaveBeenCalledOnce();
 });

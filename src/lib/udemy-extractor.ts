@@ -62,23 +62,39 @@ export class UdemyExtractor {
    * Expand all collapsed accordion sections in the curriculum sidebar
    * so that all lectures are rendered in the DOM for extraction.
    */
-  static async expandAllSections(): Promise<void> {
+  static async expandAllSections(signal?: AbortSignal): Promise<void> {
     try {
-      const collapsedTogglers = document.querySelectorAll(
-        '[data-purpose^="section-panel"] button[aria-expanded="false"], .ud-accordion-panel-toggler[aria-expanded="false"], [class*="section--panel"] button[aria-expanded="false"], [class*="section--section"] button[aria-expanded="false"]'
-      );
+      signal?.throwIfAborted();
+      const collapsedTogglers = [...document.querySelectorAll<HTMLElement>('[aria-expanded="false"]')]
+        .filter(element => !element.closest('[data-purpose^="curriculum-item"], [class*="curriculum-item-link"]') &&
+          (element.matches('.ud-accordion-panel-toggler, [data-purpose^="section-panel"]') ||
+          element.closest('[data-purpose^="section-panel"], [data-purpose="curriculum-section"], .ud-accordion-panel, [class*="section--panel"], [class*="section--section"], [class*="accordion-panel"]')));
       if (collapsedTogglers.length === 0) return;
 
       log.debug(`🎯 Expanding ${collapsedTogglers.length} collapsed sections...`);
       for (const btn of collapsedTogglers) {
+        signal?.throwIfAborted();
+        if (btn.getAttribute('aria-expanded') !== 'false') continue;
         (btn as HTMLElement).click();
         await new Promise((r) => setTimeout(r, 60));
       }
       // Give sufficient time for the DOM to render the expanded lectures
       await new Promise((resolve) => setTimeout(resolve, 1000));
     } catch (e) {
+      if (signal?.aborted) throw e;
       console.warn('Failed to expand some accordion sections:', e);
     }
+  }
+
+  /** Wait for the sidebar to mount, including pages opened in a background tab. */
+  static async loadAllItems(signal: AbortSignal): Promise<void> {
+    for (let attempt = 0; attempt < 24; attempt++) {
+      signal.throwIfAborted();
+      await this.expandAllSections(signal);
+      if (this.extractSections().some(section => section.lectures.length)) return;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    signal.throwIfAborted();
   }
 
   /**
@@ -108,7 +124,7 @@ export class UdemyExtractor {
    */
   private static extractSections(): UdemySection[] {
     const sections: UdemySection[] = [];
-    const selector = '[data-purpose^="section-panel"], [data-purpose="curriculum-section"], .ud-accordion-panel, [class*="section--panel"], [class*="section--section"], .curriculum-section';
+    const selector = '[data-purpose^="section-panel"], [data-purpose="curriculum-section"], .ud-accordion-panel, [class*="accordion-panel"], [class*="section--panel"], [class*="section--section"], .curriculum-section';
     const candidates = [...document.querySelectorAll(selector)].filter(element =>
       element.querySelector('[data-purpose="item-title"], a[href*="/learn/lecture/"], [data-purpose^="curriculum-item-"]')
     );

@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from './hls-discovery';
 import { createHlsDiscovery } from './hls-discovery';
 import { log } from './log';
 // Content Script for Transcript Extractor Extension - v3.0.0
@@ -54,6 +55,7 @@ export interface ContentScriptMessage {
     | 'GET_HLS_DOWNLOAD_CONTEXT'
     | 'PREPARE_DOWNLOAD'
     | 'GET_DOWNLOAD_ITEMS'
+    | 'CANCEL_DOWNLOAD_ITEMS'
     | 'OPEN_DOWNLOAD_ITEM'
     | 'CHECK_AVAILABILITY'
     | 'START_BATCH_COLLECTION'
@@ -82,7 +84,7 @@ export interface ContentScriptResponse {
 
 class ContentScript {
   private isInitialized = false;
-  private isPriming = false;
+  private listController?: AbortController;
   private hlsSources = createHlsDiscovery();
   private batchState: {
     isActive: boolean;
@@ -157,9 +159,23 @@ class ContentScript {
       
       switch (message.type) {
         case 'GET_DOWNLOAD_ITEMS': {
-          if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.expandAllSections();
-          const structure = await this.extractCourseStructure();
-          sendResponse({ success: true, data: structure });
+          this.listController?.abort();
+          const controller = new AbortController();
+          this.listController = controller;
+          try {
+            if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.loadAllItems(controller.signal);
+            if (YouTubeExtractor.isPlaylistPage()) await YouTubeExtractor.loadAllItems(controller.signal);
+            controller.signal.throwIfAborted();
+            const structure = await this.extractCourseStructure();
+            sendResponse({ success: true, data: { ...structure, sourceUrl: window.location.href } });
+          } finally {
+            if (this.listController === controller) this.listController = undefined;
+          }
+          break;
+        }
+        case 'CANCEL_DOWNLOAD_ITEMS': {
+          this.listController?.abort();
+          sendResponse({ success: true });
           break;
         }
         case 'OPEN_DOWNLOAD_ITEM': {
@@ -221,20 +237,7 @@ class ContentScript {
         }
 
         case 'PREPARE_DOWNLOAD': {
-          const video = findPrimaryVideo();
-          if (!video) {
-            document.querySelector<HTMLElement>(
-              '[data-purpose="video-play-button"], [data-purpose="play-button"], .vjs-big-play-button, button[aria-label="Play"]'
-            )?.click();
-          }
-          if (video && video.paused && !this.isPriming) {
-            this.isPriming = true;
-            // Muted playback primes players that only request a manifest on play.
-            const muted = video.muted;
-            video.muted = true;
-            void video.play().catch(() => undefined);
-            setTimeout(() => { video.pause(); video.muted = muted; this.isPriming = false; }, 3000);
-          }
+          // Compatibility with older panels: preparing a download never starts playback.
           sendResponse({ success: true });
           break;
         }
@@ -246,11 +249,13 @@ class ContentScript {
               .find(item => lectureId(item.url, '') === lectureId(window.location.href, ''))
             : undefined;
           sendResponse({ success: true, data: {
+            protocolVersion: PROTOCOL_VERSION,
             url: window.location.href,
             title: this.getVideoInfo()?.title || document.title,
             sources: this.hlsSources(),
             protected: Boolean(video?.mediaKeys),
             hasPlayer: Boolean(video),
+            thumbnail: video?.poster || document.querySelector<HTMLMetaElement>('meta[property="og:image"]')?.content,
             kind: /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
             loading: document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
           } });
@@ -337,7 +342,7 @@ class ContentScript {
       return UdemyExtractor.extractCourseStructure();
     }
     
-    if (YouTubeExtractor.isYouTubeVideoPage()) {
+    if (YouTubeExtractor.isYouTubeVideoPage() || YouTubeExtractor.isPlaylistPage()) {
       // Try to extract playlist first
       const playlist = YouTubeExtractor.extractPlaylist();
       if (playlist && playlist.videos.length > 0) {
@@ -349,7 +354,8 @@ class ContentScript {
           url: video.url,
           isCompleted: false,
           duration: video.duration || 'Unknown',
-          isCurrentVideo: video.isCurrentVideo
+          isCurrentVideo: video.isCurrentVideo,
+          available: !video.unavailable,
         }));
 
         // Find current video
@@ -357,6 +363,8 @@ class ContentScript {
         
         return {
           title: playlist.title,
+          totalItems: playlist.expectedVideos || playlist.totalVideos,
+          loadedItems: playlist.totalVideos,
           instructor: 'YouTube Creator',
           sections: [{
             title: 'Playlist Videos',
@@ -372,6 +380,8 @@ class ContentScript {
         };
       }
       
+      if (YouTubeExtractor.isPlaylistPage())
+        throw new Error('No playlist items were found yet. Open the playlist page and reload the list.');
       // Fallback: if no playlist found, return single video structure
       const videoInfo = YouTubeExtractor.getCurrentVideoInfo();
       if (videoInfo) {

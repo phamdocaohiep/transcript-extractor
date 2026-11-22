@@ -131,6 +131,7 @@ if (!failures.some((f) => f.includes('ESM syntax'))) {
 const REQUIRED = [
   'manifest.json',
   'content-script.js',
+  'playback-observer.js',
   'background.js',
   'dashboard.html',
   'video-download.html',
@@ -187,7 +188,20 @@ for (const host of manifest.host_permissions ?? []) {
   }
 }
 if (!(manifest.host_permissions ?? []).some((h) => h === '<all_urls>' || h === '*://*/*')) {
-  pass('No all-URLs host permission.');
+  pass('Network host access is HTTPS-only.');
+}
+if (manifest.host_permissions?.includes('https://*/*')) {
+  if (manifest.optional_host_permissions?.length) {
+    fail('Download host access must be declared at installation, not requested per CDN.');
+  } else {
+    pass('HTTPS download hosts are declared at installation.');
+  }
+  const supported = new Set(['https://*.udemy.com/*', 'https://*.youtube.com/*', 'https://*.coursera.org/*']);
+  if ((manifest.content_scripts ?? []).some(script => script.matches.some(pattern => !supported.has(pattern)))) {
+    fail('Automatic content scripts must stay limited to the supported platforms.');
+  } else {
+    pass('Automatic content scripts remain limited to supported platforms.');
+  }
 }
 
 // Every permission should have a defensible justification at review time.
@@ -198,7 +212,7 @@ const JUSTIFY = {
   sidePanel: 'Keep downloads and settings in the main extension panel while browsing.',
   clipboardWrite: 'Copy the transcript when the user asks.',
   scripting: 'Inject the extractor into the page the user is on.',
-  downloads: 'Save exported files.',
+  downloads: 'Save video/transcript files through Chrome, show their location and delete only recorded files when requested.',
   unlimitedStorage:
     'Keep screenshots the user captured from lectures. chrome.storage.local caps at 10 MB, ' +
     'which a few dozen stills exhaust; without this the browser may also evict them under ' +

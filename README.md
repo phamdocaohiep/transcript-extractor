@@ -99,18 +99,64 @@ All of this is derived from the transcript by selection and statistics, so nothi
 
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
-The destination folder is remembered in the Chrome profile. Chrome may ask to renew folder access.
+Files save automatically to Chrome's default downloads folder. No helper, terminal command,
+folder connection or File System Access grant is required for new downloads.
+Use the small **Save as** action below a video's title to edit its filename before downloading.
+Video and Markdown use the same name; unsafe path characters are replaced and existing files are not
+overwritten (a short suffix is added on collision). The original video title remains in the Markdown heading.
+The **Timestamps** export switch also applies to Markdown saved alongside videos: enabled preserves
+available source timestamps, disabled removes them. Missing source timing is not fabricated.
+Video and transcript files are handed to Chrome Downloads with no Save As dialog. Chrome resolves
+filename collisions without overwriting an existing file. The quality is not marked saved until Chrome
+reports completion. The small folder icon **beside Completed** uses Chrome's **Show in Finder** action
+for that file's download ID. This does not open a file or folder selection dialog.
+Older entries saved before the Chrome Downloads migration have no Chrome download ID: their folder
+button opens Chrome's default downloads folder and explains that the original location is unknown.
+Changing the old folder setting has no effect on new saves; new files follow Chrome's download directory.
+Temporary remux output stays in an owned OPFS directory and is cleaned up after success or failure.
+Cancelling a transfer also cancels its Chrome download if one has started. Settings offers **Open downloads
+folder** and has no helper installer or folder setup step.
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.
-Configure the destination folder in Settings. If no folder has been configured, Download shows
-an error directing you to Settings. If the saved folder needs renewed access, Download opens
-Chrome's native permission dialog and continues immediately when access is granted.
+Video and transcript progress are counted separately. A saved video remains counted when its
+transcript is unavailable, including after reopening the panel. Retrying that partial item attempts
+the missing transcript without downloading its video again.
+The small trash button deletes that video's recorded files, including transcripts and other downloaded
+qualities, then resets it to Ready with quality and Download controls. Settings → **Delete video and all
+downloaded resources without asking** skips confirmation when enabled; otherwise a confirmation is required.
+Cancel keeps files and state unchanged. Only exact recorded filenames are removed, never a whole folder.
+File records begin in version 4.7.7. Older downloads without records reset to Ready with a note that
+their files remain and must be removed manually; filenames are never guessed. If access or actual
+file deletion fails, the item is not reset and an error is shown.
+The close button at the top right of a queue stops and dismisses only that queue,
+leaving its source tab and saved files intact. It stays dismissed for that collection until the panel is reopened
+or the tab moves to another collection.
+
+The compact download card places a preview beside its title, one combined **Video quality** picker,
+and a small Download button. Multi-video selection checkboxes sit at the top left of previews. Single videos have no checkbox and appear
+directly without a duplicate queue entry or **Videos (1)** list. Only multi-video sources have a lower queue
+entry and **Videos** disclosure for item selection and detailed statuses.
+After a single video is saved, its format picker, Download button and transfer counters are replaced by
+one compact result: video and transcript downloaded, or video downloaded without a transcript.
+Single-video failures show a small **Retry** beside the error, without a list-retry block or separate
+failure summary. Retry reads the source again, then resets it to Ready. It reloads the page only
+when the automatic-reload checkbox in Settings is enabled; an unchecked checkbox never permits a Retry reload.
+Press **Download** to start again; Retry itself never starts a transfer, even with automatic mode enabled.
+Automatic reload remains off unless enabled separately.
+The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
+height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
+playlist without downloading media segments. A fixed-quality source stays at its original quality. These
+controls select existing streams; they do not transcode or upscale video. Unsupported selections fail clearly.
+Quality preferences are saved in the Chrome profile. Each quality selection has separate saved-video progress,
+so another quality can be downloaded while reusing a transcript already saved for that video.
+New downloads are ready without choosing a destination in Settings. Chrome manages the destination.
 Settings can be opened while downloading without interrupting the job.
 
-The extension primes lazy video players automatically. If a supported stream fails to appear,
-it reloads the source page once. Expired links and temporary network failures also trigger a bounded
-reload and retry. Text-only pages are skipped for video, with their transcript saved when available.
+The downloader never starts video playback. It reads existing streams and, if needed, asks you to play
+the source manually. Automatic mode waits quietly until a stream becomes available. Automatic page reload
+is off by default; **Settings → Automatically reload the source page to recover a download** enables bounded
+reload/retry for stale scripts, missing streams and transient failures. Text-only pages are skipped for video, with their transcript saved when available.
 A player that still has no supported HLS or MP4 stream is reported separately from a page without a player.
 Video pages are not skipped just because the player element has not rendered yet.
 When transcript extraction fails, the video is still saved and the item reports a partial result;
@@ -121,9 +167,86 @@ or cancellation events. Keep the side panel open until downloads finish.
 HLS MPEG-TS and fragmented MP4 are saved as standard MP4 with their original audio/video tracks.
 Direct MP4 is saved as supplied. Standard AES-128 HLS is supported. DRM, SAMPLE-AES, DASH, live streams,
 separate audio/video playlists and discontinuities requiring additional remuxing remain unsupported.
+
+### YouTube downloads
+
+Open a YouTube watch page or Short in the Chrome profile where you are signed in, then open the
+extension. The same Download action, destination folder, automatic mode and playlist selection are used.
+The **Download queues** list keeps an independent queue for each source tab. Switching between YouTube
+and Udemy tabs selects that tab's queue without cancelling downloads or permission pauses in other tabs.
+Only the active supported tab in the current window is registered when the panel opens. Other sources
+are added when you activate their tabs; background tab creation or loading does not create a card.
+Previously registered queues stay mounted when you switch away.
+Select a queue and press **Download**;
+different queues can transfer concurrently. When automatic mode is enabled, registered video tabs are
+watched independently. A host grant is reused by other waiting queues. Only the selected queue shows its
+permission dialog, so a background queue does not interrupt another queue's controls.
+Folder and format settings are shared; they cannot be changed during active transfers. Queue snapshots
+are stored separately by source tab, with existing saved-artifact progress retained. Closing a source tab
+removes its waiting queue immediately. A transfer already prepared and running inside the extension may finish
+without the source tab; it never opens the next item or reloads the closed tab, and is removed when finished.
+Keep the extension panel open during transfers; closing or reloading it stops its workers.
+Playlist pages work before opening a video, and watch-page playlist navigation retains its playlist ID.
+The extension reads existing playlist rows first. If more rows are needed and the playlist has an internal
+overflow container, only that container is scrolled and its position restored. The page viewport is never
+scrolled. Without an internal scroller, the loaded subset remains available with a warning. It compares the loaded
+count with YouTube's declared count when available. Incomplete lists show a warning and **Load remaining items**
+while still allowing the loaded selections to download;
+duplicates are counted as unique downloads and unavailable entries remain visible as skipped items.
+Automatic mode waits for a video page; it does not try to download the playlist page as a video.
+
+The extension reads formats from the current page's player and correlates them with requests the player
+has already made. Requests use the current Chrome session; cookies are not exported to a local application
+or sent to a separate download server. Extra CDN hosts use the existing access dialog.
+
+Progressive files and separate video/audio files are downloaded in bounded byte ranges, validated for
+completeness, and combined inside the extension. AVC/AAC is preferred when available; MP4 and WebM
+outputs retain the original codecs. Temporary track files are removed on success, failure or cancellation.
+Transcript failures do not prevent saving the video.
+
+SABR/UMP playback uses a bundled protocol reader and the current player's captured request context.
+A small observer runs at document start on YouTube and leaves the player's requests and responses unchanged.
+The playback context stays in memory and is not included in settings, queue records or logs. A page already
+open before the extension update may need a manual reload to load the observer (or the optional automatic-reload setting). Both tracks are consumed
+concurrently, checked against the advertised duration, and combined using the same browser-only muxer.
+Track types are recognized from MIME metadata even when optional quality labels are absent.
+If a saved format or resolution is unavailable but Auto has a compatible pair, the error offers
+the small **Retry** action to reset quality to Auto and return to Ready. Missing tracks are reported separately.
+Format discovery reads up to three snapshots when no usable quality appears. The explicit **Detect available
+qualities** action can reload once before its final attempt only when automatic reload is enabled in Settings.
+It never reloads during a download. Progress and combining details stay inside the source card.
+The state label and a compact Cancel control share a line below its thumbnail; progress uses the primary color.
+
+This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,
+or run the Python/Node/FFmpeg backend used by a desktop downloader. If the player's current session cannot
+be captured, the error includes counts and observer state without credentials. Live account playback still
+needs verification in Chrome before release; fixture and decoder tests do not establish that every
+YouTube video can be downloaded.
+
+Implementation references: [Chrome scripting](https://developer.chrome.com/docs/extensions/reference/api/scripting),
+[Mediabunny media writing](https://mediabunny.dev/guide/writing-media-files).
+SABR protocol reader: [GoogleVideo](https://github.com/LuanRT/googlevideo) (MIT, bundled locally).
+
+### Download diagnostics
+
+Open the gear button → **Diagnostics** → **Download diagnostic log** to save a JSON support file.
+Recording starts with this version and persists in the Chrome profile. Runs include a numeric source-tab ID
+to distinguish concurrent queues without storing page URLs. The bounded log retains permission
+requests/results, CDN origin patterns, response codes, retries and saved-file status.
+Format-selection failures also record the selected quality, track counts and whether Auto can work.
+It excludes cookies, tokens, signed URLs, headers, video titles, transcripts and folder paths. Routine network events are removed
+first when the 1,000-entry limit is reached, preserving permission and result events where possible.
+
+HTTPS network access (`https://*/*`) is declared as a required installation permission, including CDN hosts
+not known ahead of time. Chrome may ask for approval when installing or updating this permission;
+downloads reuse that grant without asking for each video or server. No optional host permission is declared.
+If site access is deliberately withheld in Chrome, access must be restored before downloading.
+Existing grants are checked through Chrome. New downloads never request File System Access folder
+permission. Legacy files saved through older directory handles may still need renewed access for deletion.
+The log distinguishes host access and server failures after permission has been granted.
 Incomplete video files are removed after a failure.
 
-Preferences, the folder handle, progress and installation ID remain in the same Chrome profile
+Preferences, recorded download IDs, progress and installation ID remain in the same Chrome profile
 across updates with the same extension ID. Removing the extension or clearing its storage removes them.
 Subscription polling runs at a fixed 15-minute interval in the background while Chrome is running.
 The API is currently a local simulator with active, expired, revoked and device-limit responses.
@@ -368,8 +491,8 @@ Everything runs on your machine, and the build enforces it:
 - No library uploads or analytics; source-platform caption requests may occur during extraction
 - No telemetry, analytics, crash reporting or remote configuration
 - No account, ever
-- Host permissions limited to the three supported platforms; **no all-URLs permission**, and
-  `check:store` fails the build if one appears
+- Required network access covers all HTTPS hosts at installation; automatic content scripts stay limited
+  to Udemy, Coursera and YouTube. `check:store` checks both policies and rejects all-protocol host grants
 - CSP is `script-src 'self'` — no `wasm-unsafe-eval`, because nothing evaluates generated code
 
 📖 **Full policy in [PRIVACY.md](PRIVACY.md)**

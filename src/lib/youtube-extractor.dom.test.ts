@@ -169,3 +169,95 @@ it('does not treat the captured no-captions button as available captions', async
   document.body.innerHTML = markup;
   expect(YouTubeExtractor.isTranscriptAvailable()).toBe(false);
 });
+
+it('recognizes Shorts and reads its identifier', () => {
+  window.history.replaceState({}, '', '/shorts/shortExample');
+  document.body.innerHTML = '<h1>A short example</h1>';
+  expect(YouTubeExtractor.isYouTubeVideoPage()).toBe(true);
+  expect(YouTubeExtractor.getCurrentVideoInfo()?.videoId).toBe('shortExample');
+});
+
+it('retains the active playlist when video links omit its list parameter', () => {
+  window.history.replaceState({}, '', '/watch?list=PL123&v=aaaaaaaaaaa');
+  document.body.innerHTML = `<ytd-playlist-panel-renderer>
+    <ytd-playlist-panel-video-renderer><a href="/watch?v=bbbbbbbbbbb"><span id="video-title">Second item</span></a></ytd-playlist-panel-video-renderer>
+  </ytd-playlist-panel-renderer>`;
+  const item = YouTubeExtractor.extractPlaylist()?.videos[0];
+  expect(item?.videoId).toBe('bbbbbbbbbbb');
+  expect(new URL(item!.url).searchParams.get('list')).toBe('PL123');
+});
+
+it('extracts a series from its landing page before any player has been opened', () => {
+  window.history.replaceState({}, '', '/playlist?list=PL123');
+  document.body.innerHTML = `<ytd-playlist-header-renderer><h1>Full series</h1><div id="stats">3 videos</div></ytd-playlist-header-renderer>
+    <ytd-playlist-video-list-renderer>
+      <ytd-playlist-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-video-renderer>
+      <ytd-playlist-video-renderer><span id="video-title">Private video</span></ytd-playlist-video-renderer>
+      <ytd-playlist-video-renderer><a href="/watch?v=last"><span id="video-title">Last</span></a></ytd-playlist-video-renderer>
+    </ytd-playlist-video-list-renderer>`;
+  expect(YouTubeExtractor.isYouTubeVideoPage()).toBe(false);
+  const list = YouTubeExtractor.extractPlaylist()!;
+  expect(list.title).toBe('Full series');
+  expect(list.totalVideos).toBe(3);
+  expect(list.expectedVideos).toBe(3);
+  expect(list.videos[1].unavailable).toBe(true);
+  expect(list.videos[2].url).toBe('https://www.youtube.com/watch?v=last&list=PL123');
+});
+
+it('loads delayed playlist rows and restores the original scroll position', async () => {
+  vi.useFakeTimers();
+  window.history.replaceState({}, '', '/playlist?list=PL123');
+  document.body.innerHTML = `<ytd-playlist-header-renderer><div id="stats">2 videos</div></ytd-playlist-header-renderer>
+    <ytd-playlist-video-list-renderer><ytd-playlist-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-video-renderer></ytd-playlist-video-list-renderer>`;
+  const panel = document.querySelector('ytd-playlist-video-list-renderer')!;
+  (panel as HTMLElement).style.overflowY = 'auto';
+  Object.defineProperties(panel, { scrollHeight: { value: 1000 }, clientHeight: { value: 100 } });
+  panel.scrollTop = 25;
+  panel.addEventListener('scroll', () => setTimeout(() => {
+    panel.insertAdjacentHTML('beforeend', '<ytd-playlist-video-renderer><a href="/watch?v=last"><span id="video-title">Last</span></a></ytd-playlist-video-renderer>');
+  }, 100), { once: true });
+  const loading = YouTubeExtractor.loadAllItems();
+  await vi.runAllTimersAsync(); await loading;
+  expect(YouTubeExtractor.extractPlaylist()?.videos).toHaveLength(2);
+  expect(panel.scrollTop).toBe(25);
+});
+it('does not scroll the page when the playlist has no internal scroll container', async () => {
+  window.history.replaceState({}, '', '/playlist?list=PL123');
+  document.body.innerHTML = `<ytd-playlist-header-renderer><div id="stats">2 videos</div></ytd-playlist-header-renderer>
+    <ytd-playlist-video-list-renderer><ytd-playlist-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-video-renderer></ytd-playlist-video-list-renderer>`;
+  document.documentElement.scrollTop = 80;
+  const scroll = vi.fn();
+  document.addEventListener('scroll', scroll);
+  try {
+    await YouTubeExtractor.loadAllItems();
+    expect(document.documentElement.scrollTop).toBe(80);
+    expect(scroll).not.toHaveBeenCalled();
+    expect(YouTubeExtractor.extractPlaylist()?.videos).toHaveLength(1);
+  } finally { document.removeEventListener('scroll', scroll); }
+});
+it('reads an already-loaded playlist without scrolling its internal container', async () => {
+  window.history.replaceState({}, '', '/watch?v=first&list=PL123');
+  document.body.innerHTML = `<ytd-playlist-panel-renderer style="overflow-y:auto"><span class="index-message">1 / 1</span>
+    <ytd-playlist-panel-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-panel-video-renderer></ytd-playlist-panel-renderer>`;
+  const panel = document.querySelector('ytd-playlist-panel-renderer')!;
+  panel.scrollTop = 15;
+  const scroll = vi.fn(); panel.addEventListener('scroll', scroll);
+  await YouTubeExtractor.loadAllItems();
+  expect(panel.scrollTop).toBe(15); expect(scroll).not.toHaveBeenCalled();
+});
+
+it('uses the playlist header rather than the channel name on a watch page', () => {
+  window.history.replaceState({}, '', '/watch?v=first&list=PL123');
+  document.body.innerHTML = `<yt-formatted-string title="Channel name">Channel name</yt-formatted-string>
+    <ytd-playlist-panel-renderer><h3 class="title">Full series</h3><span class="index-message">1 / 2</span>
+      <ytd-playlist-panel-video-renderer><a href="/watch?v=first"><span id="video-title">First</span></a></ytd-playlist-panel-video-renderer>
+      <ytd-playlist-panel-video-renderer><a href="/watch?v=last"><span id="video-title">Last</span></a></ytd-playlist-panel-video-renderer>
+    </ytd-playlist-panel-renderer>`;
+  expect(YouTubeExtractor.extractPlaylist()?.title).toBe('Full series');
+  expect(YouTubeExtractor.extractPlaylist()?.expectedVideos).toBe(2);
+});
+it('ignores a stale playlist panel when the current URL is a standalone video', () => {
+  window.history.replaceState({}, '', '/watch?v=current');
+  document.body.innerHTML = '<ytd-playlist-panel-renderer><ytd-playlist-panel-video-renderer><a href="/watch?v=old&list=PL123"><span id="video-title">Old video</span></a></ytd-playlist-panel-video-renderer></ytd-playlist-panel-renderer>';
+  expect(YouTubeExtractor.extractPlaylist()).toBeNull();
+});
