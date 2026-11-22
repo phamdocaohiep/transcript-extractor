@@ -230,15 +230,20 @@ it('detects available HLS qualities and downloads the selected resolution', asyn
   ).toBe(false);
   expect(container.textContent).toContain('1/1 videos saved');
 });
-it('keeps the compact download action beside one quality picker and collapses item details', async () => {
+it('shows a single video directly with selection on its preview and no duplicate list', async () => {
   await render();
   const toolbar = container.querySelector('.te-download-toolbar')!;
   expect(toolbar.querySelector('[aria-label="Video quality"]')).not.toBeNull();
   expect(toolbar.querySelector('.te-download-button')?.textContent).toBe('Download');
   expect(container.querySelectorAll('.te-download-button')).toHaveLength(1);
-  const details = container.querySelector<HTMLDetailsElement>('.te-item-details')!;
-  expect(details.open).toBe(false);
-  expect(details.querySelector('summary')?.textContent).toBe('Videos (1)');
+  expect(container.querySelector('.te-item-details')).toBeNull();
+  const checkbox = container.querySelector<HTMLInputElement>(
+    '.te-download-card-head .te-preview-selection input'
+  )!;
+  expect(checkbox.checked).toBe(true);
+  expect(checkbox.getAttribute('aria-label')).toBe('Select First lecture');
+  await act(async () => checkbox.click());
+  expect(container.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(true);
 });
 it('removes a downloaded row without deleting files or forgetting saved progress', async () => {
   await render();
@@ -255,6 +260,24 @@ it('removes a downloaded row without deleting files or forgetting saved progress
     video: true,
     transcript: true,
   });
+});
+it('shows a lower list only for multiple videos, with each checkbox on its preview', async () => {
+  listing = [1, 2].map(id => ({
+    id: String(id),
+    title: `Item ${id}`,
+    url: `https://www.udemy.com/course/test/learn/lecture/${id}`,
+  }));
+  await render();
+  const details = container.querySelector<HTMLDetailsElement>('.te-item-details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')?.textContent).toBe('Videos (2)');
+  expect(details.querySelectorAll('.te-preview-selection input')).toHaveLength(2);
+  expect(details.querySelectorAll('.te-item-title')).toHaveLength(2);
+  const all = container.querySelector<HTMLInputElement>('[aria-label="Select all (2)"]')!;
+  await act(async () => all.click());
+  expect(
+    [...details.querySelectorAll<HTMLInputElement>('input')].every(input => !input.checked)
+  ).toBe(true);
 });
 it('allows another quality to download while reusing the previously saved transcript', async () => {
   vi.mocked(loadPreferences).mockResolvedValue({
@@ -482,12 +505,8 @@ it('honors an unchecked item in the collection list', async () => {
     url: `https://www.udemy.com/course/test/learn/lecture/${id}`,
   }));
   await render();
-  const label = [...container.querySelectorAll('label')].find(value =>
-    value.textContent?.includes('Item 2')
-  )!;
-  await act(async () => {
-    (label.querySelector('input') as HTMLInputElement).click();
-  });
+  const checkbox = container.querySelector<HTMLInputElement>('[aria-label="Select Item 2"]')!;
+  await act(async () => checkbox.click());
   await click('Choose destination folder');
   await click('Download');
   expect(Object.keys(writes)).toHaveLength(2);
@@ -746,7 +765,7 @@ it('shows the course title and chapter headings and selects videos rather than q
     'Practice',
   ]);
   expect(container.textContent).not.toContain('Quiz item');
-  expect(container.textContent).toContain('Select all (2)');
+  expect(container.querySelector('[aria-label="Select all (2)"]')).not.toBeNull();
 });
 
 it('allows the current video and offers a list retry when the curriculum is not ready', async () => {
@@ -754,7 +773,7 @@ it('allows the current video and offers a list retry when the curriculum is not 
   await render();
   expect(container.textContent).toContain('Only the current video is available');
   expect(container.textContent).toContain('Retry video list');
-  expect(container.querySelectorAll('li input')).toHaveLength(1);
+  expect(container.querySelectorAll('.te-preview-selection input')).toHaveLength(1);
   await click('Choose destination folder');
   await click('Download');
   expect(container.textContent).toContain('1/1 videos saved');
@@ -1139,7 +1158,7 @@ it.each([undefined, 2, 3])(
     }));
     await render();
     expect(chrome.tabs.reload).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain('Select all (1)');
+    expect(container.querySelector('[aria-label="Select First lecture"]')).not.toBeNull();
   }
 );
 

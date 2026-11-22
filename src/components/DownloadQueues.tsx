@@ -142,73 +142,97 @@ export function DownloadQueues({
     });
   }
 
+  const grouped = entries.filter(entry => (states[entry.id]?.total || 0) > 1);
+  // One keyed list preserves each worker when its loaded item count changes.
+  const ordered: Array<Entry | null> = [
+    ...entries.filter(entry => !grouped.includes(entry)),
+    null,
+    ...grouped,
+  ];
   return (
     <>
-      <section
-        className="te-queue-switcher"
-        aria-label="Download queues"
-        hidden={entries.length === 1}
-      >
-        {message && <p role="status">{message}</p>}
-        {!entries.length && <p>Open a YouTube or Udemy page to start downloading.</p>}
-        <ul className="flex flex-col gap-2">
-          {entries.map((entry, index) => {
-            const state = states[entry.id];
-            const status = entry.closed
-              ? 'Tab closed — stopped'
-              : state?.needsAccess
-                ? 'Waiting for permission'
-                : state?.busy
-                  ? 'Working'
-                  : state?.error
-                    ? 'Needs attention'
-                    : 'Ready';
-            return (
-              <li key={entry.id} className="te-queue-entry">
-                <button
-                  className="te-btn te-queue-button"
-                  aria-current={selected === entry.id ? 'true' : undefined}
-                  onClick={() => setSelected(entry.id)}
-                >
-                  <span className="block break-words">{state?.title || entry.title}</span>
-                  <span className="block te-muted text-sm">
-                    Queue {index + 1} · {status}
-                    {state?.total ? ` · ${state.saved}/${state.total} saved` : ''}
-                  </span>
-                </button>
-                <button
-                  className="te-small-button te-queue-close"
-                  type="button"
-                  aria-label={`Close queue: ${state?.title || entry.title}`}
-                  title="Close queue; keep source tab and saved files"
-                  onClick={() => closeQueue(entry.id)}
-                >
-                  <X size={16} />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-      {entries.map(entry => (
-        <div key={entry.id} hidden={selected !== entry.id}>
-          {entry.closed ? (
-            <p role="status">
-              The source tab was closed. Its download stopped. Reopen the source page to resume
-              saved progress.
-            </p>
-          ) : (
-            <VideoDownload
-              sourceTabId={entry.id}
-              screen={screen}
-              active={visible && selected === entry.id}
-              settingsLocked={busy}
-              onClose={() => closeQueue(entry.id)}
-              onStateChange={receive}
-            />
-          )}
-        </div>
-      ))}
+      {ordered.map(entry =>
+        entry === null ? (
+          <section
+            key="queue-switcher"
+            className="te-queue-switcher"
+            aria-label="Download queues"
+            hidden={entries.length > 0 && !grouped.length && !message}
+          >
+            {message && <p role="status">{message}</p>}
+            {!entries.length && <p>Open a YouTube or Udemy page to start downloading.</p>}
+            <ul className="flex flex-col gap-2">
+              {grouped.map((entry, index) => {
+                const state = states[entry.id];
+                const status = entry.closed
+                  ? 'Tab closed — stopped'
+                  : state?.needsAccess
+                    ? 'Waiting for permission'
+                    : state?.busy
+                      ? 'Working'
+                      : state?.error
+                        ? 'Needs attention'
+                        : 'Ready';
+                return (
+                  <li key={entry.id} className="te-queue-entry">
+                    <button
+                      className="te-btn te-queue-button"
+                      aria-current={selected === entry.id ? 'true' : undefined}
+                      onClick={() => setSelected(entry.id)}
+                    >
+                      <span className="block break-words">{state?.title || entry.title}</span>
+                      <span className="block te-muted text-sm">
+                        Queue {index + 1} · {status}
+                        {state?.total ? ` · ${state.saved}/${state.total} saved` : ''}
+                      </span>
+                    </button>
+                    <button
+                      className="te-small-button te-queue-close"
+                      type="button"
+                      aria-label={`Close queue: ${state?.title || entry.title}`}
+                      title="Close queue; keep source tab and saved files"
+                      onClick={() => closeQueue(entry.id)}
+                    >
+                      <X size={16} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : (
+          <div
+            key={entry.id}
+            hidden={
+              screen === 'settings'
+                ? selected !== entry.id
+                : (states[entry.id]?.total || 0) > 1 && selected !== entry.id
+            }
+            onClickCapture={() => {
+              if ((states[entry.id]?.total || 0) <= 1) setSelected(entry.id);
+            }}
+            onFocusCapture={() => {
+              if ((states[entry.id]?.total || 0) <= 1) setSelected(entry.id);
+            }}
+          >
+            {entry.closed ? (
+              <p role="status">
+                Tab closed — stopped. The source tab was closed. Reopen the source page to resume
+                saved progress.
+              </p>
+            ) : (
+              <VideoDownload
+                sourceTabId={entry.id}
+                screen={screen}
+                active={visible && selected === entry.id}
+                settingsLocked={busy}
+                onClose={() => closeQueue(entry.id)}
+                onStateChange={receive}
+              />
+            )}
+          </div>
+        )
+      )}
     </>
   );
 }

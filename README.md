@@ -112,7 +112,9 @@ leaving its source tab and saved files intact. It stays dismissed for that colle
 or the tab moves to another collection.
 
 The compact download card places a preview beside its title, one combined **Video quality** picker,
-and a small Download button. The **Videos** disclosure opens the item selection and detailed statuses.
+and a small Download button. Selection checkboxes sit at the top left of previews. Single videos appear
+directly without a duplicate queue entry or **Videos (1)** list. Only multi-video sources have a lower queue
+entry and **Videos** disclosure for item selection and detailed statuses.
 The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
 height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
 playlist without downloading media segments. A fixed-quality source stays at its original quality. These

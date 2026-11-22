@@ -7,6 +7,7 @@ import type { QueueState } from './VideoDownload';
 
 let mounted: Set<number>;
 let stopped: number[];
+let totals: Record<number, number>;
 vi.mock('./VideoDownload', () => ({
   VideoDownload: function Worker({
     sourceTabId: id,
@@ -20,6 +21,7 @@ vi.mock('./VideoDownload', () => ({
     onStateChange: (id: number, state: QueueState) => void;
   }) {
     const [status, setStatus] = useState('Ready');
+    const total = totals[id] ?? 2;
     useEffect(() => {
       mounted.add(id);
       return () => {
@@ -34,10 +36,10 @@ vi.mock('./VideoDownload', () => ({
           needsAccess: status === 'Permission',
           title: `Source ${id}`,
           saved: 0,
-          total: 2,
+          total,
           error: false,
         }),
-      [id, status, onStateChange]
+      [id, status, total, onStateChange]
     );
     return (
       <section aria-label={`Worker ${id}`} data-active={active} data-locked={settingsLocked}>
@@ -60,6 +62,7 @@ let removed: (id: number) => void;
 let tabs: Array<{ id: number; url: string; title: string }>;
 let onBusy: ReturnType<typeof vi.fn<(busy: boolean) => void>>;
 beforeEach(() => {
+  totals = {};
   mounted = new Set();
   stopped = [];
   active = 1;
@@ -157,6 +160,22 @@ it('does not discard queues when switching to an unsupported tab', async () => {
   expect([...mounted]).toEqual([1, 2, 3]);
   expect(stopped).toEqual([]);
   expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
+});
+it('shows single videos directly above series queues without remounting their workers', async () => {
+  totals[1] = 1;
+  await render();
+  expect(stopped).toEqual([]);
+  const first = container.querySelector('[aria-label="Worker 1"]')!;
+  expect(first.closest('[hidden]')).toBeNull();
+  const switcher = container.querySelector('[aria-label="Download queues"]')!;
+  expect(switcher.textContent).not.toContain('Source 1');
+  expect(switcher.textContent).toContain('Source 2');
+  expect(first.compareDocumentPosition(switcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await click('Start 1');
+  await select(2);
+  expect(first.closest('[hidden]')).toBeNull();
+  expect(stopped).toEqual([]);
+  expect(onBusy).toHaveBeenLastCalledWith(true);
 });
 it('automatically registers a new background video tab after its URL is ready', async () => {
   await render();

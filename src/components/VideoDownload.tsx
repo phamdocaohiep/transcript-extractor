@@ -1037,6 +1037,36 @@ export function VideoDownload({
   const validChoice = preferences.video || preferences.transcript;
   const incomplete = !!listSize && listSize.loaded < listSize.expected;
   const eligible = items.filter(item => item.available !== false);
+  const single = items.length === 1 ? items[0] : undefined;
+  function renderStatus(item: DownloadItem) {
+    return (
+      <div className="te-item-status">
+        <span className="te-muted text-sm">
+          {' '}
+          — {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
+        </span>
+        {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
+          <button
+            className="te-small-button"
+            type="button"
+            aria-label={`Remove downloaded item: ${item.title}`}
+            title="Remove from list; keep saved files"
+            disabled={busy}
+            onClick={() => {
+              removed.current.add(`${groupKey(context!.url)}:${item.id}`);
+              void persistItems(
+                items.filter(value => value.id !== item.id),
+                context!.url
+              ).catch(report);
+            }}
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
+        {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
+      </div>
+    );
+  }
   return (
     <main className="flex flex-col gap-3">
       <section
@@ -1101,18 +1131,38 @@ export function VideoDownload({
           </button>
         )}
         <div className="te-download-card-head">
-          <Preview
-            url={
-              items.find(item => item.url === context?.url)?.url ||
-              items.find(item => item.selected)?.url ||
-              context?.url
-            }
-            thumbnail={context?.thumbnail}
-            title={title || context?.title || 'Video'}
-          />
+          <label className="te-preview-selection">
+            <Preview
+              url={
+                items.find(item => item.url === context?.url)?.url ||
+                items.find(item => item.selected)?.url ||
+                context?.url
+              }
+              thumbnail={context?.thumbnail}
+              title={title || context?.title || 'Video'}
+            />
+            {!!items.length && (
+              <input
+                type="checkbox"
+                className="te-preview-checkbox"
+                aria-label={single ? `Select ${single.title}` : `Select all (${eligible.length})`}
+                disabled={busy || !eligible.length}
+                checked={!!eligible.length && eligible.every(item => item.selected)}
+                onChange={event =>
+                  void persistItems(
+                    items.map(item => ({
+                      ...item,
+                      selected: item.available !== false && event.target.checked,
+                    })),
+                    context!.url
+                  ).catch(report)
+                }
+              />
+            )}
+          </label>
           <div className="te-download-card-body">
-            <h2 className="te-download-title" title={title || context?.title}>
-              {title || context?.title || 'Connect to a video'}
+            <h2 className="te-download-title" title={single?.title || title || context?.title}>
+              {single?.title || title || context?.title || 'Connect to a video'}
             </h2>
             <div className="te-download-toolbar">
               {preferences.video && (
@@ -1172,9 +1222,20 @@ export function VideoDownload({
                 Download
               </button>
             </div>
+            {single && renderStatus(single)}
             <p className="te-muted te-card-status">
-              {items.filter(item => item.selected).length} selected · {counts.saved}/{counts.total}{' '}
-              saved
+              {items.filter(item => item.selected).length} selected ·{' '}
+              {preferences.video && (
+                <>
+                  {counts.video}/{counts.total} videos saved
+                </>
+              )}
+              {preferences.video && preferences.transcript && ' · '}
+              {preferences.transcript && (
+                <>
+                  {counts.transcript}/{counts.total} transcripts saved
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -1220,98 +1281,49 @@ export function VideoDownload({
             </button>
           </div>
         )}
-        {!!items.length && (
+        {items.length > 1 && (
           <details className="te-item-details">
             <summary>Videos ({items.length})</summary>
             <div className="flex flex-col gap-3 mt-2">
-              <label>
-                <input
-                  type="checkbox"
-                  disabled={busy || !eligible.length}
-                  checked={!!eligible.length && eligible.every(item => item.selected)}
-                  onChange={e =>
-                    void persistItems(
-                      items.map(item => ({
-                        ...item,
-                        selected: item.available !== false && e.target.checked,
-                      })),
-                      context!.url
-                    ).catch(report)
-                  }
-                />{' '}
-                Select all ({eligible.length})
-              </label>
               <ul className="flex flex-col">
                 {items.map((item, index) => (
                   <li key={item.id} className="py-2">
                     {item.section && (index === 0 || items[index - 1].section !== item.section) && (
                       <h3 className="font-semibold mb-3">{item.section}</h3>
                     )}
-                    <Preview
-                      url={item.url}
-                      thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
-                      title={item.title}
-                    />
-                    <label>
-                      <input
-                        type="checkbox"
-                        disabled={busy || item.available === false}
-                        checked={item.selected}
-                        onChange={e =>
-                          void persistItems(
-                            items.map(value =>
-                              value.id === item.id
-                                ? { ...value, selected: e.target.checked }
-                                : value
-                            ),
-                            context!.url
-                          ).catch(report)
-                        }
-                      />{' '}
-                      {item.title}
-                    </label>
-                    <span className="te-muted text-sm">
-                      {' '}
-                      —{' '}
-                      {item.status === 'partial' ? 'Video saved; transcript missing' : item.status}
-                    </span>
-                    {(getSaved(item, preferences).video ||
-                      getSaved(item, preferences).transcript) && (
-                      <button
-                        className="te-small-button"
-                        type="button"
-                        aria-label={`Remove downloaded item: ${item.title}`}
-                        title="Remove from list; keep saved files"
-                        disabled={busy}
-                        onClick={() => {
-                          removed.current.add(`${groupKey(context!.url)}:${item.id}`);
-                          void persistItems(
-                            items.filter(value => value.id !== item.id),
-                            context!.url
-                          ).catch(report);
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                    {item.error && <span className="te-muted text-sm"> · {item.error}</span>}
+                    <div className="te-item-row">
+                      <label className="te-preview-selection">
+                        <Preview
+                          url={item.url}
+                          thumbnail={item.url === context?.url ? context?.thumbnail : undefined}
+                          title={item.title}
+                        />
+                        <input
+                          className="te-preview-checkbox"
+                          aria-label={`Select ${item.title}`}
+                          type="checkbox"
+                          disabled={busy || item.available === false}
+                          checked={item.selected}
+                          onChange={e =>
+                            void persistItems(
+                              items.map(value =>
+                                value.id === item.id
+                                  ? { ...value, selected: e.target.checked }
+                                  : value
+                              ),
+                              context!.url
+                            ).catch(report)
+                          }
+                        />
+                      </label>
+                      <div className="te-item-copy">
+                        <span className="te-item-title">{item.title}</span>
+                        {renderStatus(item)}
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
-              <p className="te-muted text-xs">
-                {items.filter(item => item.selected).length} selected ·{' '}
-                {preferences.video && (
-                  <>
-                    {counts.video}/{counts.total} videos saved
-                  </>
-                )}
-                {preferences.video && preferences.transcript && ' · '}
-                {preferences.transcript && (
-                  <>
-                    {counts.transcript}/{counts.total} transcripts saved
-                  </>
-                )}
-              </p>
             </div>
           </details>
         )}

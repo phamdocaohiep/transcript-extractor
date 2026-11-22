@@ -415,7 +415,7 @@ body:not(.is-popup) #root {
 .te-download-card-head { display: flex; align-items: flex-start; gap: 10px; padding-right: 22px; min-width: 0; }
 .te-download-card-head .te-preview { flex: 0 0 96px; width: 96px; height: 64px; margin: 0; }
 .te-download-card-body { flex: 1; min-width: 0; }
-.te-download-title { font-size: 13px; font-weight: 500; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px; }
+.te-download-title { font-size: 12px; font-weight: 500; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px; }
 .te-download-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .te-download-toolbar .te-quality-picker { height: 32px; width: auto; flex: 1 1 100px; min-width: 0; max-width: 200px; border-radius: 8px; padding: 0 6px; font-size: 12px; }
 .te-btn-primary.te-download-button { height: 32px; min-height: 32px; padding: 0 10px; gap: 5px; font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
@@ -820,3 +820,13 @@ body:not(.is-popup) #root {
   --te-wash-2: rgba(255, 140, 60, 0.1);
   --te-wash-3: rgba(90, 90, 255, 0.18);
 }
+
+/* Selection stays attached to the preview, including sources without a poster. */
+.te-preview-selection { position: relative; display: block; flex: 0 0 96px; width: 96px; height: 64px; overflow: hidden; border-radius: 8px; background: var(--te-btn); }
+.te-preview-selection .te-preview { width: 100%; height: 100%; margin: 0; }
+.te-preview-checkbox { position: absolute; top: 5px; left: 5px; z-index: 1; width: 16px; height: 16px; margin: 0; accent-color: var(--te-accent); cursor: pointer; }
+.te-item-row { display: flex; gap: 10px; align-items: flex-start; }
+.te-item-copy { flex: 1; min-width: 0; }
+.te-item-title { display: block; font-size: 12px; font-weight: 500; line-height: 1.45; }
+.te-item-status, .te-item-status .text-sm { font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 380px) { .te-download-card-head .te-preview-selection { flex-basis: 72px; width: 72px; height: 52px; } }
