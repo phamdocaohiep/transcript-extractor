@@ -20,7 +20,8 @@ import { groupKey } from './identity';
 import { assertEntitlement } from './subscription';
 import { lectureId } from './collection';
 import { classifyError, type Trace } from './diagnostics';
-import { saveDirectory, recordFile } from './preferences';
+import { recordFile } from './preferences';
+import { createDestination, publishFile } from './download-manager';
 import { parseTranscript } from './transcript';
 
 export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
@@ -270,7 +271,6 @@ export async function saveDownload(
   context: VideoDownloadContext,
   plan: DownloadPlan | null,
   transcript: string,
-  directory: FileSystemDirectoryHandle,
   preferences: Preferences,
   signal: AbortSignal,
   progress: (completed: number, total: number, bytes: number) => void,
@@ -284,150 +284,142 @@ export async function saveDownload(
   if (preferences.video && (!plan || context.protected))
     throw new Error('No supported video is ready.');
   if (preferences.transcript && !transcript.trim()) throw new Error('No transcript is ready.');
-  const folder = directory;
-  let base = safeVideoName(filename || context.title);
-  if (filename?.trim()) {
-    const extensions = [
-      ...(preferences.video
-        ? [plan?.kind === 'tracks' || plan?.kind === 'adaptive' ? plan.extension : 'mp4']
-        : []),
-      ...(preferences.transcript ? ['md'] : []),
-    ];
-    for (const extension of extensions) {
+  const destination = await createDestination();
+  const folder = destination.directory;
+  try {
+    let base = safeVideoName(filename || context.title);
+    if (!filename?.trim()) base += `-${crypto.randomUUID().slice(0, 8)}`;
+    if (preferences.transcript) {
+      const state = (await chrome.storage.local.get('transcriptExtractorState'))
+        .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;
+      const text =
+        state?.includeTimestamps === false
+          ? parseTranscript(transcript.replace(/\n(?=\[\d{1,2}:\d{2}(?::\d{2})?\])/g, '\n\n'))
+              .map(cue => cue.text)
+              .join('\n')
+          : transcript;
+      const file = await folder.getFileHandle(`${base}.md`, { create: true });
+      const writer = await file.createWritable();
       try {
-        await folder.getFileHandle(`${base}.${extension}`);
-        base += `-${crypto.randomUUID().slice(0, 8)}`;
-        break;
-      } catch (err) {
-        if (!(err instanceof DOMException && err.name === 'NotFoundError')) throw err;
+        await writer.write(
+          `# ${context.title.replace(/[\r\n]+/g, ' ')}\n\nSource: ${context.url}\n\n${text}\n`
+        );
+        signal.throwIfAborted();
+        await writer.close();
+        notice('Saving transcript to Chrome Downloads…');
+        const downloadId = await publishFile(folder, `${base}.md`, signal);
+        await recordFile(completionKey(context.url), { downloadId, name: `${base}.md` });
+        trace?.('file_saved', { format: 'transcript', extension: 'md' });
+      } catch (error) {
+        await writer.abort().catch(() => undefined);
+        await folder.removeEntry(`${base}.md`).catch(() => undefined);
+        throw error;
       }
     }
-  } else base += `-${crypto.randomUUID().slice(0, 8)}`;
-  if (preferences.transcript) {
-    const state = (await chrome.storage.local.get('transcriptExtractorState'))
-      .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;
-    const text =
-      state?.includeTimestamps === false
-        ? parseTranscript(transcript.replace(/\n(?=\[\d{1,2}:\d{2}(?::\d{2})?\])/g, '\n\n'))
-            .map(cue => cue.text)
-            .join('\n')
-        : transcript;
-    const file = await folder.getFileHandle(`${base}.md`, { create: true });
-    const writer = await file.createWritable();
-    try {
-      await writer.write(
-        `# ${context.title.replace(/[\r\n]+/g, ' ')}\n\nSource: ${context.url}\n\n${text}\n`
-      );
-      signal.throwIfAborted();
-      await writer.close();
-      await recordFile(completionKey(context.url), { directory, name: `${base}.md` });
-      trace?.('file_saved', { format: 'transcript', extension: 'md' });
-    } catch (error) {
-      await writer.abort().catch(() => undefined);
-      await folder.removeEntry(`${base}.md`).catch(() => undefined);
-      throw error;
-    }
-  }
-  if (preferences.video && plan) {
-    const filename = `${base}.${plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4'}`;
-    let writer: FileSystemWritableFileStream | undefined;
-    try {
-      writer = await (await folder.getFileHandle(filename, { create: true })).createWritable();
-      if (plan.kind === 'file') {
-        await writeMediaFile(
-          await fetchVideo(plan.url, signal, undefined, {}, trace),
-          bytes => writer!.write(bytes as BufferSource),
-          signal,
-          bytes => progress(0, 0, bytes)
-        );
-      } else if (plan.kind === 'adaptive') {
-        await saveAdaptive(
-          plan,
-          (url, options) => fetchVideo(url, signal, options.headers, options, trace),
-          writer,
-          signal,
-          progress,
-          notice
-        );
-      } else if (plan.kind === 'tracks') {
-        await saveTracks(
-          plan,
-          (url, headers) => fetchVideo(url, signal, headers, {}, trace),
-          writer,
-          signal,
-          progress,
-          notice
-        );
-      } else {
-        await saveMp4(
-          write =>
-            writeHls(
-              plan,
-              (part, token) =>
-                fetchVideo(
-                  part.url,
-                  token,
-                  part.range
-                    ? {
-                        Range: `bytes=${part.range.start}-${part.range.start + part.range.length - 1}`,
-                      }
-                    : undefined,
-                  {},
-                  trace
-                ),
-              (key, token) => fetchVideo(key, token, undefined, {}, trace),
-              write,
-              signal,
-              progress
-            ),
-          writer,
-          signal,
-          () => notice('Preparing the MP4 file…')
-        );
+    if (preferences.video && plan) {
+      const filename = `${base}.${plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4'}`;
+      let writer: FileSystemWritableFileStream | undefined;
+      try {
+        writer = await (await folder.getFileHandle(filename, { create: true })).createWritable();
+        if (plan.kind === 'file') {
+          await writeMediaFile(
+            await fetchVideo(plan.url, signal, undefined, {}, trace),
+            bytes => writer!.write(bytes as BufferSource),
+            signal,
+            bytes => progress(0, 0, bytes)
+          );
+        } else if (plan.kind === 'adaptive') {
+          await saveAdaptive(
+            plan,
+            (url, options) => fetchVideo(url, signal, options.headers, options, trace),
+            writer,
+            signal,
+            progress,
+            notice
+          );
+        } else if (plan.kind === 'tracks') {
+          await saveTracks(
+            plan,
+            (url, headers) => fetchVideo(url, signal, headers, {}, trace),
+            writer,
+            signal,
+            progress,
+            notice
+          );
+        } else {
+          await saveMp4(
+            write =>
+              writeHls(
+                plan,
+                (part, token) =>
+                  fetchVideo(
+                    part.url,
+                    token,
+                    part.range
+                      ? {
+                          Range: `bytes=${part.range.start}-${part.range.start + part.range.length - 1}`,
+                        }
+                      : undefined,
+                    {},
+                    trace
+                  ),
+                (key, token) => fetchVideo(key, token, undefined, {}, trace),
+                write,
+                signal,
+                progress
+              ),
+            writer,
+            signal,
+            () => notice('Preparing the MP4 file…')
+          );
+        }
+        signal.throwIfAborted();
+        await writer.close();
+        notice('Saving video to Chrome Downloads…');
+        const downloadId = await publishFile(folder, filename, signal);
+        await recordFile(completionKey(context.url), {
+          downloadId,
+          name: filename,
+          selection: selectionKey(preferences),
+        });
+        trace?.('file_saved', {
+          format: 'video',
+          extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',
+        });
+      } catch (error) {
+        await writer?.abort().catch(() => undefined);
+        await folder.removeEntry(filename).catch(() => undefined);
+        if (preferences.transcript)
+          notice('Transcript saved to Chrome Downloads. Video was not completed.');
+        throw error;
       }
-      signal.throwIfAborted();
-      await writer.close();
-      await recordFile(completionKey(context.url), {
-        directory,
-        name: filename,
-        selection: selectionKey(preferences),
-      });
-      trace?.('file_saved', {
-        format: 'video',
-        extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',
-      });
-    } catch (error) {
-      await writer?.abort().catch(() => undefined);
-      await folder.removeEntry(filename).catch(() => undefined);
-      if (preferences.transcript)
-        notice(`Transcript saved in ${directory.name}. Video was not completed.`);
-      throw error;
     }
-  }
-  notice(
-    `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} in ${directory.name}.`
-  );
-  await saveDirectory(directory, `location:${completionKey(context.url)}`);
-  const key = completionKey(context.url, preferences);
-  const sharedKey = completionKey(context.url);
-  await navigator.locks.request(`completion-${sharedKey}`, { mode: 'exclusive' }, async () => {
-    const stored = await chrome.storage.local.get([key, sharedKey]);
-    const previous = stored[key] as { video?: boolean; transcript?: boolean } | undefined;
-    const shared = stored[sharedKey] as { video?: boolean; transcript?: boolean } | undefined;
-    await chrome.storage.local.set({
-      [key]: {
-        video: preferences.video || previous?.video === true,
-        transcript:
-          preferences.transcript || previous?.transcript === true || shared?.transcript === true,
-      },
-      ...(key !== sharedKey
-        ? {
-            [sharedKey]: {
-              video: shared?.video === true,
-              transcript: preferences.transcript || shared?.transcript === true,
-            },
-          }
-        : {}),
+    notice(
+      `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} to Chrome Downloads.`
+    );
+    const key = completionKey(context.url, preferences);
+    const sharedKey = completionKey(context.url);
+    await navigator.locks.request(`completion-${sharedKey}`, { mode: 'exclusive' }, async () => {
+      const stored = await chrome.storage.local.get([key, sharedKey]);
+      const previous = stored[key] as { video?: boolean; transcript?: boolean } | undefined;
+      const shared = stored[sharedKey] as { video?: boolean; transcript?: boolean } | undefined;
+      await chrome.storage.local.set({
+        [key]: {
+          video: preferences.video || previous?.video === true,
+          transcript:
+            preferences.transcript || previous?.transcript === true || shared?.transcript === true,
+        },
+        ...(key !== sharedKey
+          ? {
+              [sharedKey]: {
+                video: shared?.video === true,
+                transcript: preferences.transcript || shared?.transcript === true,
+              },
+            }
+          : {}),
+      });
     });
-  });
+  } finally {
+    await destination.dispose().catch(() => undefined);
+  }
 }

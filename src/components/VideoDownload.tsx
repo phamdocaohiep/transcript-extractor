@@ -3,8 +3,7 @@ import type { VideoDownloadContext } from '../lib/hls-discovery';
 import { PROTOCOL_VERSION } from '../lib/hls-discovery';
 import { Trash2, X, Download, FolderOpen, Pencil } from 'lucide-react';
 import { Preview } from './Preview';
-import { deleteSaved } from '../lib/saved-files';
-import { connectFolder, revealFile } from '../lib/finder';
+import { deleteSaved, revealSaved } from '../lib/saved-files';
 import {
   HostAccessNeeded,
   SelectionUnavailable,
@@ -20,14 +19,7 @@ import { loadCourseCollection } from '../lib/collection-store';
 import { groupKey } from '../lib/identity';
 import { resolvePlayback, canRetryDownload } from '../lib/playback';
 import { readStreams, selectStreams } from '../lib/stream-discovery';
-import {
-  loadPreferences,
-  savePreferences,
-  loadDirectory,
-  saveDirectory,
-  hasDirectoryAccess,
-  loadFiles,
-} from '../lib/preferences';
+import { loadPreferences, savePreferences } from '../lib/preferences';
 import type { DownloadItem, Preferences } from '../lib/download-types';
 import { selectionKey } from '../lib/download-types';
 import { getSaved, getCounts } from '../lib/result-state';
@@ -83,8 +75,6 @@ export function VideoDownload({
   const [context, setContext] = useState<VideoDownloadContext | null>(null);
   const [source, setSource] = useState('');
   const [title, setTitle] = useState('');
-  const [directory, setDirectory] = useState<FileSystemDirectoryHandle | null>(null);
-  const [access, setAccess] = useState(false);
   const [preferences, setPreferences] = useState<Preferences>({
     video: true,
     transcript: true,
@@ -95,43 +85,8 @@ export function VideoDownload({
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const [editing, setEditing] = useState<string>();
-  const [finderBusy, setFinderBusy] = useState(false);
-  const [finderNotice, setFinderNotice] = useState('');
-  const [locations, setLocations] = useState<Record<string, FileSystemDirectoryHandle>>({});
-  useEffect(() => {
-    let disposed = false;
-    void Promise.all(
-      items
-        .filter(
-          item =>
-            item.saved?.video ||
-            item.saved?.transcript ||
-            item.status === 'completed' ||
-            item.status === 'partial'
-        )
-        .map(async item => {
-          const url = item.url || (items.length === 1 ? context?.url : undefined);
-          return [
-            item.id,
-            url ? await loadDirectory(`location:${completionKey(url)}`) : null,
-          ] as const;
-        })
-    )
-      .then(values => {
-        if (!disposed)
-          setLocations(
-            Object.fromEntries(
-              values.filter(
-                (value): value is readonly [string, FileSystemDirectoryHandle] => !!value[1]
-              )
-            )
-          );
-      })
-      .catch(() => undefined);
-    return () => {
-      disposed = true;
-    };
-  }, [items, context?.url]);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationNotice, setLocationNotice] = useState('');
   const [listSize, setListSize] = useState<{
     loaded: number;
     expected: number;
@@ -436,13 +391,9 @@ export function VideoDownload({
     void (async () => {
       try {
         const value = await loadPreferences();
-        const folder = await loadDirectory().catch(() => null);
-        const granted = folder ? await hasDirectoryAccess(folder).catch(() => false) : false;
         if (disposed) return;
         setPreferences(value);
         settings.current = value;
-        setDirectory(folder);
-        setAccess(granted);
         setLoaded(true);
       } catch (err) {
         if (!disposed) report(err);
@@ -456,16 +407,6 @@ export function VideoDownload({
       }
     };
     chrome.storage.onChanged.addListener(listener);
-    const directoryChanged = (event: Event) => {
-      const folder = (event as CustomEvent<FileSystemDirectoryHandle>).detail;
-      setDirectory(folder);
-      void hasDirectoryAccess(folder)
-        .then(granted => {
-          if (!disposed) setAccess(granted);
-        })
-        .catch(report);
-    };
-    window.addEventListener('download-directory-changed', directoryChanged);
     const warn = (event: BeforeUnloadEvent) => {
       if (working.current) {
         event.preventDefault();
@@ -477,7 +418,6 @@ export function VideoDownload({
       disposed = true;
       controller.current?.abort();
       chrome.storage.onChanged.removeListener(listener);
-      window.removeEventListener('download-directory-changed', directoryChanged);
       window.removeEventListener('beforeunload', warn);
     };
   }, []);
@@ -590,7 +530,7 @@ export function VideoDownload({
   async function savePrepared(...args: Parameters<typeof saveDownload>) {
     setTransferring(true);
     try {
-      args[9] = itemsRef.current.find(
+      args[8] = itemsRef.current.find(
         item => item.url && lectureId(item.url, '') === lectureId(args[0].url, '')
       )?.filename;
       await saveDownload(...args);
@@ -639,7 +579,6 @@ export function VideoDownload({
             current,
             null,
             result.text,
-            directory!,
             { ...choice, video: false },
             signal,
             (completed, total, bytes) => setProgress({ completed, total, bytes }),
@@ -666,7 +605,6 @@ export function VideoDownload({
             current,
             result.plan,
             result.text,
-            directory!,
             actual,
             signal,
             (completed, total, bytes) => setProgress({ completed, total, bytes }),
@@ -693,49 +631,6 @@ export function VideoDownload({
       }
     }
     throw new Error('Download did not finish.');
-  }
-  async function chooseFolder() {
-    try {
-      const picker = (
-        window as unknown as {
-          showDirectoryPicker(options: { mode: 'readwrite' }): Promise<FileSystemDirectoryHandle>;
-        }
-      ).showDirectoryPicker;
-      if (!picker)
-        throw new Error('Folder saving requires Chrome or Edge with File System Access support.');
-      const folder = await picker.call(window, { mode: 'readwrite' });
-      const granted = await hasDirectoryAccess(folder, true);
-      if (!granted) throw new Error('Write access to the selected folder was not granted.');
-      await saveDirectory(folder);
-      window.dispatchEvent(new CustomEvent('download-directory-changed', { detail: folder }));
-      setDirectory(folder);
-      setAccess(true);
-      setError('');
-    } catch (err) {
-      report(err);
-    }
-  }
-  async function ensureDirectory(): Promise<boolean> {
-    if (!directory) {
-      trace.current('directory_result', { configured: false, granted: false });
-      setError('No download folder configured. Choose a folder in Settings before downloading.');
-      return false;
-    }
-    try {
-      // Called directly from Download so Chrome can show its native permission dialog.
-      const granted = await hasDirectoryAccess(directory, true, () =>
-        trace.current('permission_requested', { permission: 'directory' })
-      );
-      trace.current('directory_result', { configured: true, granted });
-      setAccess(granted);
-      if (granted)
-        window.dispatchEvent(new CustomEvent('download-directory-changed', { detail: directory }));
-      if (!granted) setError('Folder access was not granted. Click Download to try again.');
-      return granted;
-    } catch (err) {
-      report(err);
-      return false;
-    }
   }
   async function allowHosts() {
     if (requesting.current) return;
@@ -1011,12 +906,6 @@ export function VideoDownload({
       automatic: preferences.automatic,
     });
     setBusy(true);
-    if (!(await ensureDirectory())) {
-      trace.current('run_finished', { result: 'failed', code: 'storage' });
-      working.current = false;
-      setBusy(false);
-      return;
-    }
     setError('');
     const abort = new AbortController();
     controller.current = abort;
@@ -1134,13 +1023,7 @@ export function VideoDownload({
 
   // A persistent download tab watches the source tab while automatic downloading is enabled.
   useEffect(() => {
-    if (
-      !loaded ||
-      !preferences.automatic ||
-      !directory ||
-      !access ||
-      (!preferences.video && !preferences.transcript)
-    )
+    if (!loaded || !preferences.automatic || (!preferences.video && !preferences.transcript))
       return;
     const timer = setInterval(() => {
       if (working.current || closed.current) return;
@@ -1252,7 +1135,7 @@ export function VideoDownload({
     return () => clearInterval(timer);
     // The timer is renewed whenever the saved preferences or destination change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, preferences, directory, access]);
+  }, [loaded, preferences]);
 
   const validChoice = preferences.video || preferences.transcript;
   const incomplete = !!listSize && listSize.loaded < listSize.expected;
@@ -1426,33 +1309,22 @@ export function VideoDownload({
         type="button"
         className="te-text-button te-location-button"
         aria-label="Open file location"
-        title={
-          locations[item.id]
-            ? 'Show saved file in Finder'
-            : directory
-              ? 'Open configured folder in Finder; the original location was not recorded'
-              : 'Choose a folder in Settings to open downloaded files'
-        }
-        disabled={finderBusy || (!locations[item.id] && !directory)}
+        title="Show in Finder"
+        disabled={locationBusy}
         onClick={() =>
           void (async () => {
-            setFinderBusy(true);
-            setFinderNotice('');
+            setLocationBusy(true);
+            setLocationNotice('');
             try {
-              const url = item.url || context?.url;
-              const files = url ? await loadFiles(completionKey(url)) : [];
-              const videos = [...files]
-                .reverse()
-                .filter(value => /\.(mp4|webm)$/i.test(value.name));
-              const file =
-                videos.find(value => value.selection === selectionKey(preferences)) ||
-                videos[0] ||
-                files.at(-1);
-              await revealFile(file?.directory || locations[item.id] || directory!, file?.name);
+              const result = await revealSaved(item.url || context!.url, preferences);
+              if (!result.exact)
+                setLocationNotice(
+                  'Opened Chrome Downloads. This older file has no Chrome download record, so its original location is unknown.'
+                );
             } catch (err) {
-              setFinderNotice(errorText(err));
+              setLocationNotice(errorText(err));
             } finally {
-              setFinderBusy(false);
+              setLocationBusy(false);
             }
           })()
         }
@@ -1536,49 +1408,16 @@ export function VideoDownload({
           />{' '}
           Delete video and all downloaded resources without asking
         </label>
+        <p className="te-muted text-sm">
+          Files save automatically to Chrome's default downloads folder.
+        </p>
         <button
-          className="te-btn te-folder-setting"
-          disabled={busy || settingsLocked}
-          onClick={() => void chooseFolder()}
+          type="button"
+          className="te-text-button"
+          onClick={() => chrome.downloads.showDefaultFolder()}
         >
-          {directory ? `Folder: ${directory.name} — change` : 'Choose destination folder'}
+          Open downloads folder
         </button>
-        <details className="te-finder-settings">
-          <summary>Open in Finder · macOS helper</summary>
-          <p className="te-muted text-xs">
-            Install once on this Mac, then connect the configured folder once. Opening a completed
-            file never opens a selection dialog.
-          </p>
-          <code className="te-helper-command">
-            npm run helper:install -- --extension-id {chrome.runtime.id}
-          </code>
-          <button
-            type="button"
-            className="te-btn"
-            disabled={!directory || busy || settingsLocked || finderBusy}
-            onClick={() =>
-              void (async () => {
-                setFinderBusy(true);
-                setFinderNotice('');
-                try {
-                  await connectFolder(directory!);
-                  setFinderNotice('Folder connected. Completed files can now open in Finder.');
-                } catch (err) {
-                  setFinderNotice(errorText(err));
-                } finally {
-                  setFinderBusy(false);
-                }
-              })()
-            }
-          >
-            Connect folder to Finder
-          </button>
-          {finderNotice && (
-            <p role="status" className="te-muted text-xs">
-              {finderNotice}
-            </p>
-          )}
-        </details>
         {!validChoice && <p role="alert">Choose video or transcript.</p>}
       </section>
       <section
@@ -1738,9 +1577,9 @@ export function VideoDownload({
             )}
           </div>
         </div>
-        {finderNotice && (
+        {locationNotice && (
           <p role="status" className="te-muted text-xs">
-            {finderNotice}
+            {locationNotice}
           </p>
         )}
         {!downloaded && (

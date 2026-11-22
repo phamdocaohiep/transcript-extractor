@@ -212,8 +212,7 @@ const JUSTIFY = {
   sidePanel: 'Keep downloads and settings in the main extension panel while browsing.',
   clipboardWrite: 'Copy the transcript when the user asks.',
   scripting: 'Inject the extractor into the page the user is on.',
-  downloads: 'Save exported files.',
-  nativeMessaging: 'Ask the optional, locally installed macOS helper to reveal a connected download folder or file in Finder.',
+  downloads: 'Save video/transcript files through Chrome, show their location and delete only recorded files when requested.',
   unlimitedStorage:
     'Keep screenshots the user captured from lectures. chrome.storage.local caps at 10 MB, ' +
     'which a few dozen stills exhaust; without this the browser may also evict them under ' +

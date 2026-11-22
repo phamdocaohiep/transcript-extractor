@@ -84,7 +84,7 @@ rest of the extension is unaffected.
 | `storage` | Save your preferences and collected transcripts on this device |
 | `unlimitedStorage` | Keep captured screenshots; the default 10 MB cap holds only a few |
 | `clipboardWrite` | Copy a transcript when you ask for it |
-| `nativeMessaging` | Ask an optional, locally installed macOS helper to reveal a saved file or connected folder in Finder |
+| `downloads` | Save files in Chrome’s default download directory, show their location in Finder and delete files you explicitly remove |
 | Host access to `https://*/*` | Approve HTTPS source/CDN access at installation so new video hosts do not require repeated runtime permission prompts |
 
 The extension requests persistent access to all HTTPS websites at installation.
@@ -93,11 +93,11 @@ Automatic content scripts remain limited to Udemy, Coursera and YouTube. The bro
 network grant supports video/CDN requests for downloads you initiate and caption extraction
 you request on other pages. It does not enable automatic scripts on every website.
 
-The Finder helper runs locally and is installed separately. Folder setup creates a hidden random-ID
-marker in your selected download directory; the helper keeps a local ID-to-folder-path registry under
-your macOS account. Opening a location sends only that ID and, when known, the saved filename to the
-helper on this computer. No transcript, browser cookies, media URLs or account credentials are sent to it.
-It has no network operations. These folder paths and filenames are not included in diagnostic exports.
+No native helper or native-messaging permission is used. New video/transcript files are handed to
+Chrome Downloads. Their Chrome download IDs and filenames are recorded locally so the extension can
+show their location and delete the corresponding files when you request it. Temporary remux output
+is staged on browser-owned disk and cleaned up. Legacy directory handles remain only for compatibility
+with older saved files. Download filenames and folder paths are not included in diagnostic exports.
 
 ---
 

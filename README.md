@@ -99,45 +99,23 @@ All of this is derived from the transcript by selection and statistics, so nothi
 
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
-The destination folder is remembered in the Chrome profile. Chrome may ask to renew folder access.
+Files save automatically to Chrome's default downloads folder. No helper, terminal command,
+folder connection or File System Access grant is required for new downloads.
 Use the small **Save as** action below a video's title to edit its filename before downloading.
 Video and Markdown use the same name; unsafe path characters are replaced and existing files are not
 overwritten (a short suffix is added on collision). The original video title remains in the Markdown heading.
 The **Timestamps** export switch also applies to Markdown saved alongside videos: enabled preserves
 available source timestamps, disabled removes them. Missing source timing is not fabricated.
-New video and transcript files are written directly into that folder, without creating a source subfolder.
-The small folder icon **beside Completed** reveals the saved file in macOS Finder through an optional
-local helper. It never opens a file/folder selection dialog. New downloads retain exact filenames and
-locations even if the global destination later changes. Older entries without file records open their
-connected saved folder, or the configured folder with a tooltip explaining that the original location is unknown.
-If no folder is available, the icon stays visible but disabled with a Settings hint.
-
-### Finder helper setup (macOS, Chrome)
-
-The source installer requires Node.js and Xcode Command Line Tools (`swiftc`). From this repository:
-
-```sh
-npm run helper:install -- --extension-id YOUR_EXTENSION_ID
-```
-
-Copy the ID from `chrome://extensions`; Settings also shows the command using the running extension's ID.
-The installer compiles the bundled Swift source and registers the helper for that ID in the current macOS
-user's Chrome NativeMessagingHosts directory. It requires no administrator access, does not read Chrome profiles,
-and preserves previously registered extension IDs. The helper is separate from the extension/store package.
-Updates with the same ID reuse installation; a new unpacked ID must be registered with the same command.
-
-After reloading the updated extension and accepting Chrome's native-messaging permission if prompted,
-choose Settings → **Open in Finder · macOS helper** → **Connect folder to Finder**.
-Select the **same folder** as the configured download destination once. A hidden
-`.transcript-extractor-finder.json` marker verifies the native path against the browser's selected folder.
-This setup-only chooser never appears when opening a completed file. Connect each new destination once;
-older connections stay usable. If a folder is moved, reconnect it. Cancelling or selecting another folder
-does not register it. The helper accepts only ping, folder registration and Finder reveal actions;
-it never runs arbitrary commands, deletes files or sends data over the network.
-
-`npm run helper:test` compiles the actual native executable and checks message framing, origin validation
-and request rejection without opening Finder windows. Extension tests cover marker setup, reveal dispatch
-and errors. These checks do not establish live Chrome-to-Finder UI acceptance.
+Video and transcript files are handed to Chrome Downloads with no Save As dialog. Chrome resolves
+filename collisions without overwriting an existing file. The quality is not marked saved until Chrome
+reports completion. The small folder icon **beside Completed** uses Chrome's **Show in Finder** action
+for that file's download ID. This does not open a file or folder selection dialog.
+Older entries saved before the Chrome Downloads migration have no Chrome download ID: their folder
+button opens Chrome's default downloads folder and explains that the original location is unknown.
+Changing the old folder setting has no effect on new saves; new files follow Chrome's download directory.
+Temporary remux output stays in an owned OPFS directory and is cleaned up after success or failure.
+Cancelling a transfer also cancels its Chrome download if one has started. Settings offers **Open downloads
+folder** and has no helper installer or folder setup step.
 
 Main automatically loads all available items with every item selected. Uncheck anything you
 want to skip, then click **Download**. Completed items are skipped when resuming.
@@ -172,9 +150,7 @@ playlist without downloading media segments. A fixed-quality source stays at its
 controls select existing streams; they do not transcode or upscale video. Unsupported selections fail clearly.
 Quality preferences are saved in the Chrome profile. Each quality selection has separate saved-video progress,
 so another quality can be downloaded while reusing a transcript already saved for that video.
-Configure the destination folder in Settings. If no folder has been configured, Download shows
-an error directing you to Settings. If the saved folder needs renewed access, Download opens
-Chrome's native permission dialog and continues immediately when access is granted.
+New downloads are ready without choosing a destination in Settings. Chrome manages the destination.
 Settings can be opened while downloading without interrupting the job.
 
 The downloader never starts video playback. It reads existing streams and, if needed, asks you to play
@@ -265,13 +241,12 @@ HTTPS network access (`https://*/*`) is declared as a required installation perm
 not known ahead of time. Chrome may ask for approval when installing or updating this permission;
 downloads reuse that grant without asking for each video or server. No optional host permission is declared.
 If site access is deliberately withheld in Chrome, access must be restored before downloading.
-Existing grants are checked through Chrome;
-folder permission is requested only if Chrome reports it is not already granted. The application access
-dialog and Chrome's native confirmation can both appear during an initial grant. The log distinguishes
-host access, folder access and server failures after permission has been granted.
+Existing grants are checked through Chrome. New downloads never request File System Access folder
+permission. Legacy files saved through older directory handles may still need renewed access for deletion.
+The log distinguishes host access and server failures after permission has been granted.
 Incomplete video files are removed after a failure.
 
-Preferences, the folder handle, progress and installation ID remain in the same Chrome profile
+Preferences, recorded download IDs, progress and installation ID remain in the same Chrome profile
 across updates with the same extension ID. Removing the extension or clearing its storage removes them.
 Subscription polling runs at a fixed 15-minute interval in the background while Chrome is running.
 The API is currently a local simulator with active, expired, revoked and device-limit responses.

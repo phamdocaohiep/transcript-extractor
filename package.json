@@ -1,7 +1,7 @@
 {
   "name": "transcript-extractor-extension",
   "private": true,
-  "version": "4.8.0",
+  "version": "4.9.0",
   "type": "module",
   "browser": {
     "perf_hooks": false,
@@ -27,9 +27,7 @@
     "dev:start": "node scripts/lifecycle.mjs dev",
     "pro:start": "node scripts/lifecycle.mjs pro",
     "pub:dev": "node scripts/lifecycle.mjs pub-dev",
-    "pub:pro": "node scripts/lifecycle.mjs pub-pro",
-    "helper:install": "node scripts/install-finder-helper.mjs",
-    "helper:test": "node scripts/test-finder-helper.mjs"
+    "pub:pro": "node scripts/lifecycle.mjs pub-pro"
   },
   "dependencies": {
     "clsx": "^2.1.1",

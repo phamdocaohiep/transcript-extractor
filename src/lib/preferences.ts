@@ -38,7 +38,8 @@ async function openStore(): Promise<IDBDatabase> {
 }
 
 export interface SavedFile {
-  directory: FileSystemDirectoryHandle;
+  directory?: FileSystemDirectoryHandle;
+  downloadId?: number;
   name: string;
   selection?: string;
 }

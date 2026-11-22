@@ -413,7 +413,6 @@ body:not(.is-popup) #root {
 .te-download-card { position: relative; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .te-download-card, .te-download-card-body, .te-download-progress { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .te-download-progress > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
-.te-btn.te-folder-setting { height: auto; min-height: 44px; white-space: normal; overflow-wrap: anywhere; padding: 8px 12px; line-height: 1.4; max-width: 100%; }
 .te-filename-control { min-width: 0; margin: -4px 0 6px; }
 .te-filename-control button { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow-wrap: anywhere; }
 .te-filename-input { width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid var(--te-btn-border); border-radius: 6px; font-size: 11px; background: var(--te-btn); color: var(--te-text); }
@@ -430,9 +429,6 @@ body:not(.is-popup) #root {
 .te-status-line { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .te-status-line .te-cancel-button { font-size: 10px; align-self: auto; }
 .te-location-button { display: inline-flex; vertical-align: middle; margin-left: 6px; padding: 2px; }
-.te-finder-settings { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.te-finder-settings > * { margin-top: 8px; }
-.te-helper-command { display: block; white-space: normal; overflow-wrap: anywhere; font-size: 11px; user-select: all; }
 .te-download-progress { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 11px; }
 .te-download-progress:empty { display: none; }
 .te-download-progress progress { height: 4px; display: block; appearance: none; border: 0; border-radius: 4px; overflow: hidden; background: var(--te-btn); accent-color: var(--te-accent); }

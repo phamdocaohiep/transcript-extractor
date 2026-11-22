@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { deleteSaved } from './saved-files';
+import { deleteSaved, revealSaved } from './saved-files';
 import { loadFiles, clearFiles, hasDirectoryAccess } from './preferences';
 vi.mock('./preferences', () => ({
   loadFiles: vi.fn(),
@@ -22,6 +22,12 @@ beforeEach(() => {
     ],
   };
   vi.stubGlobal('chrome', {
+    downloads: {
+      search: vi.fn(async (query: { id: number }) => [{ id: query.id, exists: true }]),
+      removeFile: vi.fn(async () => undefined),
+      show: vi.fn(),
+      showDefaultFolder: vi.fn(),
+    },
     storage: {
       local: {
         get: vi.fn(async () => ({ ...data })),
@@ -31,6 +37,40 @@ beforeEach(() => {
       },
     },
   });
+});
+it('reveals the requested Chrome rendition and falls back to Chrome Downloads for legacy entries', async () => {
+  vi.mocked(loadFiles).mockResolvedValue([
+    { name: '720.mp4', selection: 'mp4:720', downloadId: 42 },
+    { name: '1080.mp4', selection: 'mp4:1080', downloadId: 43 },
+  ]);
+  await expect(revealSaved(url, { format: 'mp4', maxHeight: 720 })).resolves.toEqual({
+    exact: true,
+  });
+  expect(chrome.downloads.show).toHaveBeenCalledExactlyOnceWith(42);
+  vi.mocked(loadFiles).mockResolvedValue([]);
+  await expect(revealSaved(url)).resolves.toEqual({ exact: false });
+  expect(chrome.downloads.showDefaultFolder).toHaveBeenCalled();
+});
+it('deletes Chrome-managed files through their IDs without requesting directory permissions', async () => {
+  vi.mocked(hasDirectoryAccess).mockClear();
+  vi.mocked(loadFiles).mockResolvedValue([
+    { name: 'video.mp4', downloadId: 42 },
+    { name: 'video.md', downloadId: 43 },
+  ]);
+  await deleteSaved(url);
+  expect(chrome.downloads.removeFile).toHaveBeenNthCalledWith(1, 42);
+  expect(chrome.downloads.removeFile).toHaveBeenNthCalledWith(2, 43);
+  expect(hasDirectoryAccess).not.toHaveBeenCalled();
+  expect(data[key]).toEqual({ video: false, transcript: false });
+});
+it('does not reset completion when Chrome cannot delete an existing file', async () => {
+  vi.mocked(loadFiles).mockResolvedValue([{ name: 'video.mp4', downloadId: 42 }]);
+  (chrome.downloads.removeFile as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+    new Error('Blocked')
+  );
+  await expect(deleteSaved(url)).rejects.toThrow('Blocked');
+  expect(data[key]).toEqual({ video: true, transcript: true });
+  expect(clearFiles).not.toHaveBeenCalled();
 });
 it('removes every recorded rendition and transcript in their actual directories, preserving unrelated files and queues', async () => {
   const first = { removeEntry: vi.fn() };
