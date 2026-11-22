@@ -266,6 +266,52 @@ it('does not reload a stale source by default', async () => {
   await render();
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
   expect(container.textContent).toContain('older extension script');
+  expect(container.querySelectorAll('button.te-retry-button')).toHaveLength(1);
+  expect(container.querySelector('.te-download-toolbar')).toBeNull();
+  await click('Retry');
+  expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+  expect(container.querySelector('.te-download-title')?.textContent).toBe('First lecture');
+  expect(folder.getFileHandle).not.toHaveBeenCalled();
+});
+it('offers one small retry beside a failed single item and reloads only after that click', async () => {
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  let fail = true;
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    if (fail) {
+      fail = false;
+      return new Response('Unavailable', { status: 500 });
+    }
+    return original(...args);
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(container.querySelectorAll('button.te-retry-button')).toHaveLength(1);
+  expect(container.querySelector('.te-item-status .te-retry-button')).not.toBeNull();
+  expect(container.querySelector('.te-download-toolbar')).toBeNull();
+  expect(container.textContent).not.toContain('Retry video list');
+  expect(container.textContent).not.toContain('The full list is not loaded');
+  expect(container.textContent).not.toContain('Finished: 0 saved');
+  await click('Retry');
+  expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+  expect(container.textContent).toContain('1 video & transcript downloaded');
+});
+it('takes a fresh source snapshot before reading its videos after navigation', async () => {
+  let reads = 0;
+  const original = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) => {
+    if ((args[1] as { type: string }).type === 'GET_HLS_DOWNLOAD_CONTEXT' && ++reads === 2) {
+      currentUrl = 'https://www.udemy.com/course/next/learn/lecture/2';
+      listing = [{ id: '2', title: 'Next video', url: currentUrl }];
+    }
+    return original(...args);
+  });
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
+  expect(container.textContent).not.toContain('outside this collection');
 });
 it('shows a lower list only for multiple videos, with each checkbox on its preview', async () => {
   listing = [1, 2].map(id => ({
@@ -803,11 +849,11 @@ it('shows the course title and chapter headings and selects videos rather than q
   expect(container.querySelector('[aria-label="Select all (2)"]')).not.toBeNull();
 });
 
-it('allows the current video and offers a list retry when the curriculum is not ready', async () => {
+it('allows one current video without showing a list-retry block', async () => {
   listing = [];
   await render();
-  expect(container.textContent).toContain('Only the current video is available');
-  expect(container.textContent).toContain('Retry video list');
+  expect(container.textContent).not.toContain('Retry video list');
+  expect(container.textContent).not.toContain('The full list is not loaded');
   expect(container.querySelectorAll('.te-preview-selection input')).toHaveLength(0);
   await click('Choose destination folder');
   await click('Download');
@@ -819,7 +865,7 @@ it('offers a list retry without inventing a video when neither curriculum nor pl
   hasSources = false;
   await render();
   expect(container.textContent).toContain('The video list is not ready');
-  expect(container.textContent).toContain('Retry video list');
+  expect(container.querySelector('button.te-retry-button')?.textContent).toBe('Retry');
   expect(container.querySelectorAll('li input')).toHaveLength(0);
 });
 it('restores saved progress for the current video while waiting for the full curriculum', async () => {
@@ -1077,9 +1123,9 @@ it('does not start an automatic retry immediately after a manual download fails'
   await act(async () => {
     await vi.advanceTimersByTimeAsync(22000);
   });
-  expect(container.textContent).toContain('1 failed');
+  expect(container.querySelector('.te-item-status')?.textContent).toContain('failed');
   const download = [...container.querySelectorAll('button')].find(
-    button => button.textContent === 'Download'
+    button => button.textContent === 'Retry'
   )!;
   expect(download.disabled).toBe(false);
   expect(

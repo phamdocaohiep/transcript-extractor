@@ -1042,7 +1042,7 @@ export class YouTubeExtractor {
       log.debug('🎯 Starting YouTube playlist extraction...');
       
       // A playlist can be selected before any video is opened.
-      if (!this.isYouTubeVideoPage() && !this.isPlaylistPage()) {
+      if (!this.isPlaylistPage()) {
         log.debug('🎯 Not on a YouTube video page');
         return null;
       }

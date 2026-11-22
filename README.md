@@ -117,6 +117,9 @@ directly without a duplicate queue entry or **Videos (1)** list. Only multi-vide
 entry and **Videos** disclosure for item selection and detailed statuses.
 After a single video is saved, its format picker, Download button and transfer counters are replaced by
 one compact result: video and transcript downloaded, or video downloaded without a transcript.
+Single-video failures show a small **Retry** beside the error, without a list-retry block or separate
+failure summary. Retry explicitly reloads and reconnects that source tab; it repeats a failed download
+only when one had already been requested. Automatic reload remains off unless enabled separately.
 The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
 height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
 playlist without downloading media segments. A fixed-quality source stays at its original quality. These

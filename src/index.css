@@ -422,6 +422,7 @@ body:not(.is-popup) #root {
 .te-card-status { font-size: 11px; margin-top: 6px; }
 .te-text-button { align-self: flex-start; font-size: 11px; color: var(--te-text-2); text-decoration: underline; }
 .te-text-button:disabled { opacity: .5; }
+.te-retry-button { display: inline-flex; margin-left: 6px; }
 .te-item-details { border-top: 1px solid var(--te-btn-border); padding-top: 8px; font-size: 12px; }
 .te-item-details summary { cursor: pointer; color: var(--te-text-2); }
 @media (max-width: 380px) {

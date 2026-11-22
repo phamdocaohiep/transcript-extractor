@@ -256,3 +256,8 @@ it('uses the playlist header rather than the channel name on a watch page', () =
   expect(YouTubeExtractor.extractPlaylist()?.title).toBe('Full series');
   expect(YouTubeExtractor.extractPlaylist()?.expectedVideos).toBe(2);
 });
+it('ignores a stale playlist panel when the current URL is a standalone video', () => {
+  window.history.replaceState({}, '', '/watch?v=current');
+  document.body.innerHTML = '<ytd-playlist-panel-renderer><ytd-playlist-panel-video-renderer><a href="/watch?v=old&list=PL123"><span id="video-title">Old video</span></a></ytd-playlist-panel-video-renderer></ytd-playlist-panel-renderer>';
+  expect(YouTubeExtractor.extractPlaylist()).toBeNull();
+});

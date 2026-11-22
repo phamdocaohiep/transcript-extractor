@@ -98,6 +98,8 @@ export function VideoDownload({
   const [qualityLoading, setQualityLoading] = useState(false);
   const qualityController = useRef<AbortController | null>(null);
   const removed = useRef(new Set<string>());
+  const retryAfterRefresh = useRef(false);
+  const listedGroup = useRef('');
   useEffect(() => {
     if (!context || !preferences.video) return;
     const abort = new AbortController();
@@ -372,7 +374,7 @@ export function VideoDownload({
 
   useEffect(() => {
     const changed = (id: number, info: chrome.tabs.OnUpdatedInfo) => {
-      if (id !== tabId || info.status !== 'complete' || working.current) return;
+      if (id !== tabId || (info.status !== 'complete' && !info.url) || working.current) return;
       void pageContext()
         .then(next => {
           setContext(next);
@@ -641,10 +643,39 @@ export function VideoDownload({
       setRequestingAccess(false);
     }
   }
+  async function retry() {
+    if (working.current || closed.current) return;
+    const repeat = items.length === 1 && items[0].status === 'failed';
+    working.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    setItems([]);
+    setProgress({ completed: 0, total: 0, bytes: 0 });
+    const abort = new AbortController();
+    controller.current = abort;
+    try {
+      // This reload is explicitly requested by Retry, independently of auto reload.
+      await chrome.tabs.reload(tabId);
+      const current = await waitForContext(abort.signal);
+      setContext(current);
+      setSource(current.sources[0] || '');
+      loadedList.current = '';
+      retryAfterRefresh.current = repeat;
+    } catch (err) {
+      retryAfterRefresh.current = false;
+      report(err);
+    } finally {
+      working.current = false;
+      setBusy(false);
+      controller.current = null;
+    }
+  }
   const legacyQueueKey = (url: string) =>
     `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}${preferences.format || preferences.maxHeight ? `:quality:${selectionKey(preferences)}` : ''}`;
   const queueKey = (url: string) => `${legacyQueueKey(url)}:tab:${tabId}`;
   async function persistItems(value: DownloadItem[], url: string) {
+    listedGroup.current = groupKey(url);
     if (value.length === 1 && value[0].available !== false)
       value = [{ ...value[0], selected: true }];
     await chrome.storage.local.set({ [queueKey(url)]: value });
@@ -665,10 +696,17 @@ export function VideoDownload({
     setNotice('Loading items…');
     setListFailed(false);
     try {
+      const current = await pageContext();
+      if (listedGroup.current && listedGroup.current !== groupKey(current.url)) setItems([]);
+      setContext(current);
       const response = await send('GET_DOWNLOAD_ITEMS');
       abort.signal.throwIfAborted();
       if (!response?.success) throw new Error(response?.error || 'Could not load the item list.');
-      setTitle(response.data?.title || context.title);
+      if (response.data?.sourceUrl && groupKey(response.data.sourceUrl) !== groupKey(current.url))
+        throw new Error('The source changed while reading its videos. Retry to reconnect.');
+      loadedList.current = `${groupKey(current.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+      setContext(current);
+      setTitle(response.data?.title || current.title);
       const sections = Array.isArray(response.data?.sections) ? response.data.sections : [];
       const keys = sections.flatMap((section: { lectures?: Array<{ url?: string }> }) =>
         (section.lectures || []).flatMap(item =>
@@ -677,11 +715,11 @@ export function VideoDownload({
       );
       const completedFiles = keys.length ? await chrome.storage.local.get(keys) : {};
       const storedQueues = await chrome.storage.local.get([
-        queueKey(context.url),
-        legacyQueueKey(context.url),
+        queueKey(current.url),
+        legacyQueueKey(current.url),
       ]);
-      const stored = (storedQueues[queueKey(context.url)] ??
-        storedQueues[legacyQueueKey(context.url)]) as DownloadItem[] | undefined;
+      const stored = (storedQueues[queueKey(current.url)] ??
+        storedQueues[legacyQueueKey(current.url)]) as DownloadItem[] | undefined;
       const seen = new Set<string>();
       const next: DownloadItem[] = [];
       for (const section of sections) {
@@ -739,13 +777,13 @@ export function VideoDownload({
           });
         }
       }
-      if (!next.length && /(^|\.)udemy\.com$/.test(new URL(context.url).hostname)) {
+      if (!next.length && /(^|\.)udemy\.com$/.test(new URL(current.url).hostname)) {
         setListFailed(true);
         if (
-          !context.hasPlayer &&
-          !context.sources.length &&
-          !context.streams?.length &&
-          !context.adaptive
+          !current.hasPlayer &&
+          !current.sources.length &&
+          !current.streams?.length &&
+          !current.adaptive
         )
           throw new Error('The video list is not ready. Open Course content and retry the list.');
         setError(
@@ -753,8 +791,8 @@ export function VideoDownload({
         );
       }
       if (!next.length) {
-        const key = completionKey(context.url, preferences);
-        const base = completionKey(context.url);
+        const key = completionKey(current.url, preferences);
+        const base = completionKey(current.url);
         const marks = await chrome.storage.local.get([key, base]);
         const shared = marks[base] as { transcript?: boolean } | undefined;
         const previous = marks[key] as { video?: boolean; transcript?: boolean } | undefined;
@@ -765,9 +803,9 @@ export function VideoDownload({
         const complete =
           (!preferences.video || saved.video) && (!preferences.transcript || saved.transcript);
         next.push({
-          id: lectureId(context.url, ''),
-          title: context.title,
-          url: context.url,
+          id: lectureId(current.url, ''),
+          title: current.title,
+          url: current.url,
           selected: true,
           saved,
           status: complete
@@ -778,9 +816,9 @@ export function VideoDownload({
         });
       }
       const visibleItems = next.filter(
-        item => !removed.current.has(`${groupKey(context.url)}:${item.id}`)
+        item => !removed.current.has(`${groupKey(current.url)}:${item.id}`)
       );
-      await persistItems(visibleItems, context.url);
+      await persistItems(visibleItems, current.url);
       const loadedCount = Number(response.data?.loadedItems) || next.length;
       const expectedCount = Number(response.data?.totalItems) || loadedCount;
       setListSize({ loaded: loadedCount, expected: expectedCount, unique: visibleItems.length });
@@ -790,6 +828,7 @@ export function VideoDownload({
         total: next.length,
       });
     } catch (err) {
+      retryAfterRefresh.current = false;
       setListFailed(true);
       listingTrace('run_finished', { result: 'failed', code: classifyError(err) });
       report(err);
@@ -960,6 +999,13 @@ export function VideoDownload({
     void loadItems();
   });
 
+  useEffect(() => {
+    if (retryAfterRefresh.current && !working.current && !busy && items.length && context) {
+      retryAfterRefresh.current = false;
+      void runQueue();
+    }
+  });
+
   // A persistent download tab watches the source tab while automatic downloading is enabled.
   useEffect(() => {
     if (
@@ -1083,6 +1129,18 @@ export function VideoDownload({
       ? getSaved(single, preferences).video
       : getSaved(single, preferences).transcript
     : false;
+  function renderRetry() {
+    return (
+      <button
+        type="button"
+        className="te-text-button te-retry-button"
+        disabled={busy || sourceClosed}
+        onClick={() => void retry()}
+      >
+        Retry
+      </button>
+    );
+  }
   function renderStatus(item: DownloadItem, compact = false) {
     const saved = getSaved(item, preferences);
     const label = compact
@@ -1126,6 +1184,7 @@ export function VideoDownload({
         {item.error && (!compact || !saved.video) && (
           <span className="te-muted text-sm"> · {item.error}</span>
         )}
+        {compact && item.status === 'failed' && !saved.video && renderRetry()}
       </div>
     );
   }
@@ -1237,68 +1296,78 @@ export function VideoDownload({
             <h2 className="te-download-title" title={single?.title || title || context?.title}>
               {single?.title || title || context?.title || 'Connect to a video'}
             </h2>
-            {!downloaded && !sourceClosed && (
-              <div className="te-download-toolbar">
-                {preferences.video && (
-                  <select
-                    className="te-select te-quality-picker"
-                    aria-label="Video quality"
-                    value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
-                    disabled={busy || settingsLocked || qualityLoading}
-                    onChange={event => {
-                      const [format, height] = event.target.value.split(':');
-                      void changePreferences({
-                        ...preferences,
-                        format: format === 'auto' ? undefined : (format as 'mp4' | 'webm'),
-                        maxHeight: Number(height) || undefined,
-                      });
-                    }}
-                  >
-                    <option value="auto:0">Auto quality</option>
-                    {renditions.map(item => (
-                      <option
-                        key={`${item.format}:${item.height}`}
-                        value={`${item.format}:${item.height}`}
-                      >
-                        {item.format.toUpperCase()} · {item.height ? `${item.height}p` : 'Source'}
-                      </option>
-                    ))}
-                    {(preferences.format || preferences.maxHeight) &&
-                      !renditions.some(
-                        item =>
-                          item.format === preferences.format &&
-                          item.height === (preferences.maxHeight || 0)
-                      ) && (
+            {!downloaded &&
+              !sourceClosed &&
+              single?.status !== 'failed' &&
+              !!context &&
+              !!items.length && (
+                <div className="te-download-toolbar">
+                  {preferences.video && (
+                    <select
+                      className="te-select te-quality-picker"
+                      aria-label="Video quality"
+                      value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                      disabled={busy || settingsLocked || qualityLoading}
+                      onChange={event => {
+                        const [format, height] = event.target.value.split(':');
+                        void changePreferences({
+                          ...preferences,
+                          format: format === 'auto' ? undefined : (format as 'mp4' | 'webm'),
+                          maxHeight: Number(height) || undefined,
+                        });
+                      }}
+                    >
+                      <option value="auto:0">Auto quality</option>
+                      {renditions.map(item => (
                         <option
-                          value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                          key={`${item.format}:${item.height}`}
+                          value={`${item.format}:${item.height}`}
                         >
-                          {preferences.format?.toUpperCase() || 'Auto'} ·{' '}
-                          {preferences.maxHeight ? `≤${preferences.maxHeight}p` : 'Source'}
+                          {item.format.toUpperCase()} · {item.height ? `${item.height}p` : 'Source'}
                         </option>
-                      )}
-                  </select>
-                )}
-                <button
-                  className="te-btn-primary te-download-button"
-                  disabled={
-                    busy ||
-                    qualityLoading ||
-                    !context ||
-                    !validChoice ||
-                    !items.some(
-                      item =>
-                        item.selected && item.status !== 'completed' && item.status !== 'skipped'
-                    )
-                  }
-                  onClick={() => void runQueue()}
-                >
-                  <Download size={15} />
-                  Download
-                </button>
+                      ))}
+                      {(preferences.format || preferences.maxHeight) &&
+                        !renditions.some(
+                          item =>
+                            item.format === preferences.format &&
+                            item.height === (preferences.maxHeight || 0)
+                        ) && (
+                          <option
+                            value={`${preferences.format || 'auto'}:${preferences.maxHeight || 0}`}
+                          >
+                            {preferences.format?.toUpperCase() || 'Auto'} ·{' '}
+                            {preferences.maxHeight ? `≤${preferences.maxHeight}p` : 'Source'}
+                          </option>
+                        )}
+                    </select>
+                  )}
+                  <button
+                    className="te-btn-primary te-download-button"
+                    disabled={
+                      busy ||
+                      qualityLoading ||
+                      !context ||
+                      !validChoice ||
+                      !items.some(
+                        item =>
+                          item.selected && item.status !== 'completed' && item.status !== 'skipped'
+                      )
+                    }
+                    onClick={() => void runQueue()}
+                  >
+                    <Download size={15} />
+                    Download
+                  </button>
+                </div>
+              )}
+            {single && renderStatus(single, true)}
+            {error && error !== single?.error && !(single && listFailed) && (
+              <div className="te-item-status" role="alert">
+                <span>Failed · {error}</span>
+                {renderRetry()}
               </div>
             )}
-            {single && renderStatus(single, true)}
-            {!single && (
+            {items.length > 1 && (
               <p className="te-muted te-card-status">
                 {items.filter(item => item.selected).length} selected ·{' '}
                 {preferences.video && (
@@ -1317,6 +1386,7 @@ export function VideoDownload({
           </div>
         </div>
         {!downloaded &&
+        single?.status !== 'failed' &&
         !sourceClosed &&
         preferences.video &&
         context?.sources.length &&
@@ -1344,14 +1414,16 @@ export function VideoDownload({
             {qualityLoading ? 'Reading qualities…' : 'Detect available qualities'}
           </button>
         ) : null}
-        {!downloaded && qualityNotice && <p className="te-muted text-xs">{qualityNotice}</p>}
-        {listSize && listSize.expected !== listSize.unique && (
+        {!downloaded && single?.status !== 'failed' && qualityNotice && (
+          <p className="te-muted text-xs">{qualityNotice}</p>
+        )}
+        {items.length > 1 && listSize && listSize.expected !== listSize.unique && (
           <p className="te-muted text-sm">
             {listSize.loaded}/{listSize.expected} playlist entries loaded · {listSize.unique} unique
             items
           </p>
         )}
-        {(incomplete || listFailed) && (
+        {items.length > 1 && (incomplete || listFailed) && (
           <div className="flex flex-col gap-2">
             <p className="te-muted text-sm" role="status">
               The full list is not loaded. You can download the selected items now or retry the
@@ -1452,7 +1524,7 @@ export function VideoDownload({
           </button>
         </div>
       </dialog>
-      {!downloaded && (progress.total > 0 || progress.bytes > 0) && (
+      {!downloaded && single?.status !== 'failed' && (progress.total > 0 || progress.bytes > 0) && (
         <div>
           {progress.total > 0 && (
             <progress className="w-full" value={progress.completed} max={progress.total} />
@@ -1468,12 +1540,12 @@ export function VideoDownload({
           Cancel
         </button>
       )}
-      {notice && !downloaded && (
+      {notice && !downloaded && !(single && notice.startsWith('Finished:')) && (
         <p role="status" className="te-glass p-4">
           {notice}
         </p>
       )}
-      {error && (
+      {error && screen === 'settings' && (
         <p role="alert" className="te-note te-note--warn p-4">
           {error}
         </p>

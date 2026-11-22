@@ -167,7 +167,7 @@ class ContentScript {
             if (YouTubeExtractor.isPlaylistPage()) await YouTubeExtractor.loadAllItems(controller.signal);
             controller.signal.throwIfAborted();
             const structure = await this.extractCourseStructure();
-            sendResponse({ success: true, data: structure });
+            sendResponse({ success: true, data: { ...structure, sourceUrl: window.location.href } });
           } finally {
             if (this.listController === controller) this.listController = undefined;
           }
