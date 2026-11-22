@@ -374,6 +374,8 @@ it('keeps progress, combining details and cancellation inside the source card', 
   expect(card.querySelector('.te-preview-column .te-preview-status')?.textContent).toBe(
     'Downloading'
   );
+  expect(card.querySelector('.te-status-line [aria-label="Cancel download"]')).not.toBeNull();
+  expect(card.querySelector('.te-download-progress button')).toBeNull();
   expect(card.querySelector('progress')?.value).toBe(2);
   expect(card.querySelector('.te-download-progress')?.textContent).toContain('1.0 MB downloaded');
   expect(card.querySelector('.te-download-progress [role="status"]')?.textContent).toContain(
@@ -416,6 +418,7 @@ it('does not reload a stale source by default', async () => {
   await render();
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
   expect(container.textContent).toContain('older extension script');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Failed');
   expect(container.querySelectorAll('button.te-retry-button')).toHaveLength(1);
   expect(container.querySelector('.te-download-toolbar')).toBeNull();
   await click('Retry');
@@ -445,6 +448,30 @@ it('offers one small retry beside a failed single item and reloads only after th
   expect(container.textContent).not.toContain('Finished: 0 saved');
   await click('Retry');
   expect(chrome.tabs.reload).toHaveBeenCalledExactlyOnceWith(42);
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+  expect(Object.keys(writes)).toHaveLength(0);
+  await click('Download');
+  expect(container.textContent).toContain('1 video & transcript downloaded');
+});
+it('keeps Retry at Ready even when automatic downloading is enabled', async () => {
+  vi.useFakeTimers();
+  vi.mocked(loadPreferences).mockResolvedValue({ video: true, transcript: true, automatic: true });
+  const original = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockResolvedValueOnce(new Response('Unavailable', { status: 500 }));
+  await render();
+  await click('Choose destination folder');
+  await click('Download');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Failed');
+  await click('Retry');
+  expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+  const requests = vi.mocked(fetch).mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(fetch).toHaveBeenCalledTimes(requests);
+  expect(Object.keys(writes)).toHaveLength(0);
+  vi.mocked(fetch).mockImplementation(original);
+  await click('Download');
   expect(container.textContent).toContain('1 video & transcript downloaded');
 });
 it('takes a fresh source snapshot before reading its videos after navigation', async () => {
@@ -1274,6 +1301,9 @@ it.each([{}, { format: 'webm' as const }, { maxHeight: 144 }])(
         maxHeight: undefined,
       });
       expect(stored[completionKey(currentUrl, choice)]).toBeUndefined();
+      expect(saveAdaptive).not.toHaveBeenCalled();
+      expect(container.querySelector('.te-preview-status')?.textContent).toBe('Ready');
+      await click('Download');
     }
     expect(saveAdaptive).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'adaptive', session: adaptive }),

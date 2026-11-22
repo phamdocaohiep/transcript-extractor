@@ -76,7 +76,11 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('chrome', {
     tabs: {
-      query: vi.fn(async () => tabs.map(tab => ({ ...tab, active: tab.id === active }))),
+      query: vi.fn(async (query: { active?: boolean }) =>
+        tabs
+          .filter(tab => !query.active || tab.id === active)
+          .map(tab => ({ ...tab, active: tab.id === active }))
+      ),
       onActivated: {
         addListener: vi.fn(listener => (activated = listener)),
         removeListener: vi.fn(),
@@ -110,6 +114,21 @@ async function select(id: number) {
   active = id;
   await act(async () => activated());
 }
+it('opens only the active source after an update without creating cards for untouched tabs', async () => {
+  await render();
+  expect(chrome.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+  expect([...mounted]).toEqual([1]);
+  await act(async () => updated(3, { status: 'complete' }, { active: false }));
+  expect([...mounted]).toEqual([1]);
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  active = 2;
+  await render();
+  expect([...mounted]).toEqual([2]);
+  expect(container.querySelector('[aria-label="Worker 3"]')).toBeNull();
+  await select(3);
+  expect([...mounted]).toEqual([2, 3]);
+});
 
 it('keeps a paused source mounted while another YouTube tab and an Udemy tab start independent queues', async () => {
   await render();
@@ -141,9 +160,11 @@ it('keeps a paused source mounted while another YouTube tab and an Udemy tab sta
 
 it('removes closed waiting tabs immediately and finishes only an active transfer', async () => {
   await render();
+  await select(3);
   await act(async () => removed(3));
   expect(mounted.has(3)).toBe(false);
   await click('Start 1');
+  await select(2);
   await click('Start 2');
   await act(async () => removed(1));
   expect(mounted.has(1)).toBe(true);
@@ -159,7 +180,7 @@ it('does not discard queues when switching to an unsupported tab', async () => {
   await render();
   await click('Start 1');
   await select(4);
-  expect([...mounted]).toEqual([1, 2, 3]);
+  expect([...mounted]).toEqual([1]);
   expect(stopped).toEqual([]);
   expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
 });
@@ -171,6 +192,7 @@ it('shows single videos directly above series queues without remounting their wo
   expect(first.closest('[hidden]')).toBeNull();
   const switcher = container.querySelector('[aria-label="Download queues"]')!;
   expect(switcher.textContent).not.toContain('Source 1');
+  await select(2);
   expect(switcher.textContent).toContain('Source 2');
   expect(first.compareDocumentPosition(switcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await click('Start 1');
@@ -179,19 +201,23 @@ it('shows single videos directly above series queues without remounting their wo
   expect(stopped).toEqual([]);
   expect(onBusy).toHaveBeenLastCalledWith(true);
 });
-it('automatically registers a new background video tab after its URL is ready', async () => {
+it('registers a new video tab only after activation, including its background load events', async () => {
   await render();
   tabs.push({ id: 5, url: 'about:blank', title: 'Loading' });
   await act(async () => created());
   expect(mounted.has(5)).toBe(false);
   tabs[4] = { id: 5, url: 'https://www.youtube.com/watch?v=new', title: 'New video' };
   await act(async () => updated(5, { status: 'complete' }, { active: false }));
-  expect(mounted.has(5)).toBe(true);
+  expect(mounted.has(5)).toBe(false);
+  expect(mounted.has(3)).toBe(false);
   expect(container.querySelector('[aria-label="Worker 1"]')?.closest('[hidden]')).toBeNull();
+  await select(5);
+  expect(mounted.has(5)).toBe(true);
 });
 it('closes only the requested queue, keeps its source tab open and suppresses rediscovery until its URL changes', async () => {
   await render();
   await click('Start 1');
+  await select(2);
   await click('Start 2');
   const close = container.querySelector<HTMLButtonElement>('[aria-label="Close queue: Source 1"]')!;
   await act(async () => close.click());

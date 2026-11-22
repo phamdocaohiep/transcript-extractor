@@ -118,8 +118,9 @@ entry and **Videos** disclosure for item selection and detailed statuses.
 After a single video is saved, its format picker, Download button and transfer counters are replaced by
 one compact result: video and transcript downloaded, or video downloaded without a transcript.
 Single-video failures show a small **Retry** beside the error, without a list-retry block or separate
-failure summary. Retry explicitly reloads and reconnects that source tab; it repeats a failed download
-only when one had already been requested. Automatic reload remains off unless enabled separately.
+failure summary. Retry explicitly reloads and reconnects that source tab, then resets it to Ready.
+Press **Download** to start again; Retry itself never starts a transfer, even with automatic mode enabled.
+Automatic reload remains off unless enabled separately.
 The quality menu offers Auto and available MP4/WebM resolutions, limiting advertised renditions to the selected
 height. YouTube choices come from the player; for HLS, use **Detect available qualities** to read the master
 playlist without downloading media segments. A fixed-quality source stays at its original quality. These
@@ -152,7 +153,9 @@ Open a YouTube watch page or Short in the Chrome profile where you are signed in
 extension. The same Download action, destination folder, automatic mode and playlist selection are used.
 The **Download queues** list keeps an independent queue for each source tab. Switching between YouTube
 and Udemy tabs selects that tab's queue without cancelling downloads or permission pauses in other tabs.
-Supported video tabs in the current window are detected and registered automatically, including new background tabs.
+Only the active supported tab in the current window is registered when the panel opens. Other sources
+are added when you activate their tabs; background tab creation or loading does not create a card.
+Previously registered queues stay mounted when you switch away.
 Select a queue and press **Download**;
 different queues can transfer concurrently. When automatic mode is enabled, registered video tabs are
 watched independently. A host grant is reused by other waiting queues. Only the selected queue shows its
@@ -187,11 +190,11 @@ open before the extension update may need a manual reload to load the observer (
 concurrently, checked against the advertised duration, and combined using the same browser-only muxer.
 Track types are recognized from MIME metadata even when optional quality labels are absent.
 If a saved format or resolution is unavailable but Auto has a compatible pair, the error offers
-the small **Retry** action to reset quality to Auto and try again. Missing tracks are reported separately.
+the small **Retry** action to reset quality to Auto and return to Ready. Missing tracks are reported separately.
 Format discovery reads up to three snapshots when no usable quality appears. The explicit **Detect available
 qualities** action can reload once before its final attempt only when automatic reload is enabled in Settings.
-It never reloads during a download. Progress, combining details and Cancel stay inside the source card;
-the state label appears below its thumbnail.
+It never reloads during a download. Progress and combining details stay inside the source card.
+The state label and a compact Cancel control share a line below its thumbnail; progress uses the primary color.
 
 This does not evaluate downloaded player scripts, invent missing signatures, mint proof tokens, bypass DRM,
 or run the Python/Node/FFmpeg backend used by a desktop downloader. If the player's current session cannot

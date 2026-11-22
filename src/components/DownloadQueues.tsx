@@ -96,7 +96,7 @@ export function DownloadQueues({
     const update = (follow = true) => {
       const current = ++revision;
       void chrome.tabs
-        .query({ currentWindow: true })
+        .query({ active: true, currentWindow: true })
         .then(tabs => {
           if (disposed || current !== revision) return;
           for (const tab of tabs)
@@ -104,6 +104,7 @@ export function DownloadQueues({
           const found = tabs.filter(
             tab =>
               tab.id !== undefined &&
+              tab.active &&
               supports(tab.url) &&
               dismissed.current.get(tab.id) !== groupKey(tab.url)
           );
@@ -128,7 +129,7 @@ export function DownloadQueues({
         setEntries(previous =>
           previous.map(entry => (entry.id === id ? { ...entry, title: info.title! } : entry))
         );
-      if (info.status === 'complete' || info.url) update(tab.active);
+      if (tab.active && (info.status === 'complete' || info.url)) update();
     };
     const removed = (id: number) => {
       revision++;
@@ -179,7 +180,7 @@ export function DownloadQueues({
             hidden={entries.length > 0 && !grouped.length && !message}
           >
             {message && <p role="status">{message}</p>}
-            {!entries.length && <p>Open a YouTube or Udemy page to start downloading.</p>}
+            {!entries.length && <p>Switch to a YouTube or Udemy tab to start downloading.</p>}
             <ul className="flex flex-col gap-2">
               {grouped.map((entry, index) => {
                 const state = states[entry.id];

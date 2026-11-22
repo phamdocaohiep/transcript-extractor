@@ -100,7 +100,6 @@ export function VideoDownload({
   const [qualityLoading, setQualityLoading] = useState(false);
   const qualityController = useRef<AbortController | null>(null);
   const removed = useRef(new Set<string>());
-  const retryAfterRefresh = useRef(false);
   const resetSelection = useRef(false);
   const listedGroup = useRef('');
   useEffect(() => {
@@ -696,13 +695,14 @@ export function VideoDownload({
   }
   async function retry() {
     if (working.current || closed.current) return;
-    const repeat = items.length === 1 && items[0].status === 'failed';
     working.current = true;
     setBusy(true);
     setError('');
     setNotice('');
     setItems([]);
     setProgress({ completed: 0, total: 0, bytes: 0 });
+    resumeQueue.current = false;
+    setHosts([]);
     const abort = new AbortController();
     controller.current = abort;
     try {
@@ -720,9 +720,9 @@ export function VideoDownload({
       setContext(current);
       setSource(current.sources[0] || '');
       loadedList.current = '';
-      retryAfterRefresh.current = repeat;
+      // Retry reconnects and resets the row; only Download starts another transfer.
+      automaticAttempt.current = `${lectureId(current.url, '')}:${settings.current.video}:${settings.current.transcript}:${selectionKey(settings.current)}`;
     } catch (err) {
-      retryAfterRefresh.current = false;
       report(err);
     } finally {
       working.current = false;
@@ -890,7 +890,6 @@ export function VideoDownload({
         total: next.length,
       });
     } catch (err) {
-      retryAfterRefresh.current = false;
       setListFailed(true);
       listingTrace('run_finished', { result: 'failed', code: classifyError(err) });
       report(err);
@@ -1059,13 +1058,6 @@ export function VideoDownload({
     if (loadedList.current === key) return;
     loadedList.current = key;
     void loadItems();
-  });
-
-  useEffect(() => {
-    if (retryAfterRefresh.current && !working.current && !busy && items.length && context) {
-      retryAfterRefresh.current = false;
-      void runQueue();
-    }
   });
 
   // A persistent download tab watches the source tab while automatic downloading is enabled.
@@ -1257,6 +1249,20 @@ export function VideoDownload({
       </div>
     );
   }
+  function renderCancel() {
+    return (
+      <button
+        type="button"
+        className="te-text-button te-cancel-button"
+        title="Cancel download"
+        aria-label="Cancel download"
+        onClick={() => controller.current?.abort()}
+      >
+        <X size={12} aria-hidden="true" />
+        <span className="sr-only">Cancel</span>
+      </button>
+    );
+  }
   function renderLabel(item: DownloadItem) {
     const label =
       item.status === 'pending'
@@ -1264,7 +1270,12 @@ export function VideoDownload({
         : item.status === 'partial'
           ? 'Completed'
           : item.status[0].toUpperCase() + item.status.slice(1);
-    return <span className="te-preview-status te-muted">{label}</span>;
+    return (
+      <div className="te-status-line">
+        <span className="te-preview-status te-muted">{label}</span>
+        {single && item.status === 'downloading' && renderCancel()}
+      </div>
+    );
   }
   return (
     <main className="flex flex-col gap-3">
@@ -1373,13 +1384,18 @@ export function VideoDownload({
             </label>
             {single && renderLabel(single)}
             {!single && (
-              <span className="te-preview-status te-muted">
-                {busy
-                  ? 'Downloading'
-                  : counts.total > 0 && counts.saved === counts.total
-                    ? 'Completed'
-                    : 'Ready'}
-              </span>
+              <div className="te-status-line">
+                <span className="te-preview-status te-muted">
+                  {error
+                    ? 'Failed'
+                    : busy
+                      ? 'Downloading'
+                      : counts.total > 0 && counts.saved === counts.total
+                        ? 'Completed'
+                        : 'Ready'}
+                </span>
+                {busy && renderCancel()}
+              </div>
             )}
           </div>
           <div className="te-download-card-body">
@@ -1500,11 +1516,6 @@ export function VideoDownload({
                   {notice}
                 </span>
               )}
-            {busy && (
-              <button className="te-text-button" onClick={() => controller.current?.abort()}>
-                Cancel
-              </button>
-            )}
           </div>
         )}
         {!downloaded &&
