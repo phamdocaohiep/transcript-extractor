@@ -184,14 +184,18 @@ timestamps are retained when the Timestamps export setting is enabled. No subtit
 when the source provides none.
 
 Practice/final tests export only questions and options already visible in your authorized session.
-These Markdown files are snapshots, not interactive tests or complete question banks. The extension
-does not start attempts, submit responses, reveal hidden answers or unlock restricted items. If an
-attempt must be opened first, that entry reports an error and the queue continues. Protected or
+These Markdown files are snapshots, not interactive tests or complete question banks. For completed practice quizzes, the extension uses **Try again → Continue**; when an unfinished
+practice attempt exists it prefers **Resume assignment**, preserving existing answers. It never
+selects answers or submits responses. Graded tests must already be open; unopened or locked entries
+report an error and the queue continues. Hidden answers and restricted items are not unlocked. Protected or
 unavailable media is reported rather than bypassed. Chrome Downloads manages all output files;
 the saved-file location and delete-resources controls also cover audio and document exports.
 
 Coverage includes synthetic Coursera DOM/queue regression tests and real AAC/Opus remux fixtures.
-Signed-in Coursera behavior still needs live verification; the development chat has no browser access.
+Live Chrome checks on Introduction to Data Engineering discovered 88 items, including 44 videos.
+A video and separate AAC audio file were parsed successfully after download; practice reopening
+was exercised live. Reading readiness and resume behavior also have synthetic regression coverage.
+Discovery depends on the outline exposed by the signed-in course; this is not a guarantee for every course.
 
 ### YouTube downloads
 

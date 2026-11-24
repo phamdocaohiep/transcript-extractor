@@ -2,6 +2,7 @@ import { log } from './log';
 import { parseTimestamp, formatTimestamp } from './transcript';
 import { errorMessage } from './utils';
 import { parseCaptionFile } from './caption-formats';
+import { lectureId } from './collection';
 // Coursera Extractor for Transcript Extractor Extension
 // Handles transcript extraction from Coursera course videos
 
@@ -87,8 +88,8 @@ export class CourseraExtractor {
       const url = window.location.href;
       let contentId = 'unknown';
 
-      const lectureMatch = url.match(/\/(?:lecture|quiz|exam)\/([^/]+)/);
-      const readingMatch = url.match(/\/reading\/([^/]+)/);
+      const lectureMatch = url.match(/\/(?:lecture|quiz|exam|assignment-submission)\/([^/]+)/);
+      const readingMatch = url.match(/\/(?:reading|supplement)\/([^/]+)/);
 
       if (lectureMatch) {
         contentId = lectureMatch[1];
@@ -116,7 +117,21 @@ export class CourseraExtractor {
       // Wait for content to load
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      if (this.getKind() === 'quiz') return this.extractAssessment();
+      if (this.getKind() === 'quiz') return await this.readAssessment();
+
+      if (this.getKind() === 'article') {
+        const address = location.href;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          if (location.href !== address)
+            throw new Error('The source changed while loading the reading.');
+          const content = this.extractReadingContent();
+          if (content) return content;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        throw new Error(
+          'The reading is still loading or unavailable. Retry when its content is visible.'
+        );
+      }
 
       // Try to extract video transcript first
       const transcriptEntries = this.extractTranscriptEntries();
@@ -238,6 +253,13 @@ export class CourseraExtractor {
       if (!readingContainer) {
         return null;
       }
+      const visibleText = readingContainer.textContent?.trim() || '';
+      if (
+        !visibleText ||
+        /^loading[\s.…]*$/i.test(visibleText) ||
+        readingContainer.closest('[aria-busy="true"]')
+      )
+        return null;
 
       // Get content info
       const contentInfo = this.getCurrentVideoInfo();
@@ -338,13 +360,24 @@ export class CourseraExtractor {
   private static incomplete = false;
 
   static getKind(): 'video' | 'article' | 'quiz' | undefined {
-    return /\/(quiz|exam)\//.test(location.pathname)
+    return /\/(quiz|exam|assignment-submission)\//.test(location.pathname)
       ? 'quiz'
-      : /\/reading\//.test(location.pathname)
+      : /\/(reading|supplement)\//.test(location.pathname)
         ? 'article'
         : /\/lecture\//.test(location.pathname)
           ? 'video'
           : undefined;
+  }
+  static isLoading(): boolean {
+    if (this.getKind() !== 'article') return false;
+    const container = document.querySelector('.rc-CML, .rc-ReadingItem');
+    const text = container?.textContent?.trim() || '';
+    return (
+      !document.querySelector('h1') ||
+      !text ||
+      /^loading[\s.…]*$/i.test(text) ||
+      !!container?.closest('[aria-busy="true"]')
+    );
   }
   static getSources(): string[] {
     const found = new Set<string>();
@@ -415,7 +448,7 @@ export class CourseraExtractor {
       if (url.origin !== location.origin || !url.pathname.startsWith(`${prefix}/`)) continue;
       const match = url.pathname
         .slice(prefix.length)
-        .match(/^\/(lecture|reading|quiz|exam)\/([^/]+)(?:\/|$)/);
+        .match(/^\/(lecture|reading|supplement|quiz|exam|assignment-submission)\/([^/]+)(?:\/|$)/);
       if (!match || found.some(item => item.id === `${match[1]}:${match[2]}`)) continue;
       const title = (
         link.querySelector('[data-testid="item-title"], .item-title') || link
@@ -433,7 +466,12 @@ export class CourseraExtractor {
         title,
         url: url.href,
         section,
-        kind: match[1] === 'lecture' ? 'video' : match[1] === 'reading' ? 'article' : 'quiz',
+        kind:
+          match[1] === 'lecture'
+            ? 'video'
+            : match[1] === 'reading' || match[1] === 'supplement'
+              ? 'article'
+              : 'quiz',
         available:
           link.getAttribute('aria-disabled') !== 'true' && !link.closest('[data-locked="true"]'),
       });
@@ -449,7 +487,7 @@ export class CourseraExtractor {
     this.incomplete = false;
     let expanded = false;
     for (const button of document.querySelectorAll<HTMLButtonElement>(
-      '.rc-Module button[aria-expanded="false"], [data-testid*="syllabus"] button[aria-expanded="false"], nav[aria-label*="course" i] button[aria-expanded="false"]'
+      '.rc-Module button[aria-expanded="false"], [data-testid*="syllabus"] button[aria-expanded="false"], nav[aria-label*="course" i] button[aria-expanded="false"], h3 button[aria-expanded="false"]'
     )) {
       signal.throwIfAborted();
       button.click();
@@ -526,7 +564,7 @@ export class CourseraExtractor {
     if (
       current &&
       kind &&
-      !items.some(item => item.url === current.url.split('?')[0].split('#')[0])
+      !items.some(item => lectureId(item.url, '') === lectureId(current.url, ''))
     )
       items.push({
         id: current.videoId,
@@ -557,8 +595,61 @@ export class CourseraExtractor {
       notice:
         this.incomplete || items.length <= 1
           ? 'Only discovered items are listed. Open the course outline and retry the list if modules are missing.'
-          : 'Practice/final tests export only questions visible to your session. Unopened or locked attempts are reported as unavailable.',
+          : 'Completed practice quizzes can reopen with Try again. Graded tests export only questions already open in your session; nothing is submitted.',
     };
+  }
+  private static async readAssessment(): Promise<string> {
+    try {
+      return this.extractAssessment();
+    } catch {
+      // Only reopen completed practice quizzes. Do not start graded or unopened assessments.
+    }
+    const address = lectureId(location.href, '');
+    const heading = document.querySelector('h1')?.textContent?.trim() || '';
+    const buttons = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
+        button => !button.disabled && !button.closest('[hidden],[aria-hidden="true"]')
+      );
+    const retry = buttons().find(button => button.textContent?.trim() === 'Try again');
+    const resume = buttons().find(button => button.textContent?.trim() === 'Resume assignment');
+    const completed = buttons().some(button => button.textContent?.trim() === 'View feedback');
+    if (
+      !/^Practice Quiz\b/i.test(heading) ||
+      !/\/practice-quiz(?:-|$)/i.test(new URL(address).pathname) ||
+      (!resume && (!completed || !retry))
+    )
+      return this.extractAssessment();
+    (resume || retry)!.click();
+    let confirmed = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (lectureId(location.href, '') !== address)
+        throw new Error('The source changed while opening practice questions.');
+      const title = [...document.querySelectorAll('h1,h2,h3')].find(
+        element => element.textContent?.trim() === 'Start new attempt?'
+      );
+      const dialog = title?.closest('[role="dialog"],dialog') || title?.parentElement;
+      const proceed =
+        dialog &&
+        [...dialog.querySelectorAll<HTMLButtonElement>('button')].find(
+          button => button.textContent?.trim() === 'Continue' && !button.disabled
+        );
+      if (
+        !resume &&
+        !confirmed &&
+        proceed &&
+        /replace your previous submission/i.test(dialog?.textContent || '')
+      ) {
+        proceed.click();
+        confirmed = true;
+      }
+      try {
+        return this.extractAssessment();
+      } catch {
+        /* Wait for questions, never select or submit. */
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw new Error('Practice questions did not load. Retry when the questions are visible.');
   }
   private static extractAssessment(): string {
     const root = document.querySelector('main') || document.body;
@@ -582,6 +673,15 @@ export class CourseraExtractor {
       );
     const title = this.getCurrentVideoInfo()?.title || 'Assessment';
     const parts = questions.map((question, index) => {
+      const prompt =
+        (question.getAttribute('aria-labelledby') || '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(id => document.getElementById(id)?.textContent?.trim() || '')
+          .join(' ')
+          .trim() ||
+        question.getAttribute('aria-label')?.trim() ||
+        '';
       const copy = question.cloneNode(true) as Element;
       const originals = question.querySelectorAll('*');
       const copies = copy.querySelectorAll('*');
@@ -592,7 +692,11 @@ export class CourseraExtractor {
       copy
         .querySelectorAll('script,style,button,input,textarea,select,[hidden],[aria-hidden="true"]')
         .forEach(element => element.remove());
-      return `## Question ${index + 1}\n\n${copy.textContent?.trim() || 'Question text unavailable.'}`;
+      copy.querySelectorAll('label,[role="radio"],[role="checkbox"]').forEach(element => {
+        element.insertAdjacentText('afterend', '\n');
+      });
+      const text = copy.textContent?.trim() || '';
+      return `## Question ${index + 1}\n\n${prompt && !text.includes(prompt) ? `${prompt}\n\n` : ''}${text || 'Question text unavailable.'}`;
     });
     return `# ${title}\n\nSource: ${location.href}\n\nVisible-question snapshot only; this is not an interactive test or complete question bank.\n\n${parts.join('\n\n')}`;
   }

@@ -42,6 +42,11 @@ export function lectureId(url: string | undefined, fallback: string): string {
   if (!url) return fallback;
   try {
     const parsed = new URL(url);
+    if (
+      (parsed.hostname === 'coursera.org' || parsed.hostname.endsWith('.coursera.org')) &&
+      /^\/learn\/[^/]+\/assignment-submission\//.test(parsed.pathname)
+    )
+      parsed.pathname = parsed.pathname.replace(/\/attempt\/?$/, '');
     const video = parsed.searchParams.get('v');
     return `${parsed.origin}${parsed.pathname}${video ? `?v=${video}` : ''}`;
   } catch {

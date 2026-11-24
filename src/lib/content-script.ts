@@ -259,7 +259,7 @@ class ContentScript {
             hasPlayer: Boolean(video),
             thumbnail: video?.poster || document.querySelector<HTMLMetaElement>('meta[property="og:image"]')?.content,
             kind: CourseraExtractor.isCourseraCoursePage() ? CourseraExtractor.getKind() : /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
-            loading: document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
+            loading: (CourseraExtractor.isCourseraCoursePage() && CourseraExtractor.isLoading()) || document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
           } });
           break;
         }

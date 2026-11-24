@@ -17,6 +17,12 @@ const lecture = (id: string, title: string, transcript = '[00:00] hello there'):
 });
 
 describe('lectureId', () => {
+  it('keeps a Coursera assessment and its attempt under the same identity', () => {
+    const base = 'https://www.coursera.org/learn/x/assignment-submission/p1/practice-quiz';
+    expect(lectureId(`${base}/attempt`, '')).toBe(lectureId(base, ''));
+    expect(lectureId(`${base}/attempt/`, '')).toBe(lectureId(base, ''));
+    expect(lectureId('https://example.test/attempt', '')).toBe('https://example.test/attempt');
+  });
   it('ignores query and hash, so one lecture stays one lecture', () => {
     expect(lectureId('https://udemy.com/course/x/learn/lecture/42?start=15#overview', 'f')).toBe(
       lectureId('https://udemy.com/course/x/learn/lecture/42', 'f'),

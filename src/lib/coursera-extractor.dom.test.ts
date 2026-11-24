@@ -12,6 +12,23 @@ import { CourseraExtractor } from './coursera-extractor';
 
 const LECTURE = '/learn/machine-learning/lecture/abc123/gradient-descent';
 
+it.each([
+  ['assignment-submission/cKYHt/practice-quiz', 'quiz'],
+  ['assignment-submission/VvXGH/graded-quiz', 'quiz'],
+  ['supplement/oOixb/summary-and-highlights', 'article'],
+])('recognizes the current Coursera route %s', async (path, kind) => {
+  window.history.pushState({}, '', `/learn/machine-learning/${path}`);
+  document.body.innerHTML = `<h1>Current item</h1><a href="/learn/machine-learning/${path}">Current item</a>`;
+  expect(CourseraExtractor.getKind()).toBe(kind);
+  expect(CourseraExtractor.getCurrentVideoInfo()?.videoId).not.toBe('unknown');
+  await CourseraExtractor.loadAllItems(new AbortController().signal);
+  const items = CourseraExtractor.extractCourseStructure().sections.flatMap(
+    (section: { lectures: unknown[] }) => section.lectures
+  );
+  expect(items).toHaveLength(1);
+  expect(items[0].kind).toBe(kind);
+});
+
 afterEach(() => {
   window.history.pushState({}, '', LECTURE);
   vi.useRealTimers();
@@ -94,6 +111,89 @@ it('reads an exposed caption file with its real timestamps without starting play
     'https://cdn.test/subs.vtt',
     expect.objectContaining({ redirect: 'error' })
   );
+});
+it('waits for reading content instead of saving its loading placeholder', async () => {
+  vi.useFakeTimers();
+  window.history.pushState({}, '', '/learn/machine-learning/supplement/notes/summary');
+  document.body.innerHTML = '<div class="rc-CML">Loading</div>';
+  const pending = CourseraExtractor.extractTranscript();
+  await vi.advanceTimersByTimeAsync(2200);
+  document.body.innerHTML = '<h1>Summary</h1><div class="rc-CML"><p>The actual reading.</p></div>';
+  await vi.advanceTimersByTimeAsync(500);
+  expect(await pending).toContain('The actual reading.');
+  expect(await pending).not.toContain('Loading');
+});
+it('reopens only a completed practice quiz through Try again and Continue without submitting', async () => {
+  vi.useFakeTimers();
+  const path = '/learn/machine-learning/assignment-submission/p1/practice-quiz';
+  window.history.pushState({}, '', path);
+  document.body.innerHTML =
+    '<h1>Practice Quiz</h1><button>Try again</button><button>View feedback</button>';
+  const submit = vi.fn();
+  document.querySelector('button')!.onclick = () => {
+    document.body.innerHTML +=
+      '<div role="dialog"><h2>Start new attempt?</h2><p>When you submit a new attempt it will replace your previous submission.</p><button>Continue</button></div>';
+    document.querySelector<HTMLButtonElement>('[role="dialog"] button')!.onclick = () => {
+      window.history.pushState({}, '', `${path}/attempt`);
+      document.body.innerHTML =
+        '<h1>Practice Quiz</h1><div data-testid="question"><p>Sample question?</p><label><input type="radio">Option one</label></div><button>Submit</button>';
+      document.querySelector('button')!.onclick = submit;
+    };
+  };
+  const pending = CourseraExtractor.extractTranscript();
+  await vi.advanceTimersByTimeAsync(3000);
+  const text = await pending;
+  expect(text).toContain('Sample question?');
+  expect(text).toContain('Option one');
+  expect(submit).not.toHaveBeenCalled();
+  expect(document.querySelector<HTMLInputElement>('input')!.checked).toBe(false);
+});
+it('does not reopen a graded assessment even when Try again is present', async () => {
+  vi.useFakeTimers();
+  window.history.pushState({}, '', '/learn/machine-learning/assignment-submission/g1/graded-quiz');
+  document.body.innerHTML =
+    '<h1>Graded Quiz</h1><button>Try again</button><button>View feedback</button>';
+  const click = vi.fn();
+  document.querySelector('button')!.onclick = click;
+  const pending = CourseraExtractor.extractTranscript();
+  const rejected = expect(pending).rejects.toThrow('No visible test questions');
+  await vi.advanceTimersByTimeAsync(2000);
+  await rejected;
+  expect(click).not.toHaveBeenCalled();
+});
+it('prefers Resume assignment and preserves unanswered and previously selected controls', async () => {
+  vi.useFakeTimers();
+  const path = '/learn/machine-learning/assignment-submission/p1/practice-quiz';
+  window.history.pushState({}, '', path);
+  document.body.innerHTML =
+    '<h1>Practice Quiz</h1><button>Resume assignment</button><button>Try again</button>';
+  const retry = vi.fn();
+  document.querySelectorAll('button')[1].onclick = retry;
+  document.querySelector('button')!.onclick = () => {
+    window.history.pushState({}, '', `${path}/attempt`);
+    document.body.innerHTML =
+      '<div data-testid="question"><p>Existing question?</p><label><input type="radio" checked>Saved option</label><label><input type="radio">Other option</label></div><button>Submit</button>';
+  };
+  const pending = CourseraExtractor.extractTranscript();
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(await pending).toContain('Existing question?');
+  expect(retry).not.toHaveBeenCalled();
+  expect(
+    [...document.querySelectorAll<HTMLInputElement>('input')].map(input => input.checked)
+  ).toEqual([true, false]);
+});
+it('includes the prompt referenced outside the option group and separates options', async () => {
+  vi.useFakeTimers();
+  window.history.pushState(
+    {},
+    '',
+    '/learn/machine-learning/assignment-submission/p1/practice-quiz/attempt'
+  );
+  document.body.innerHTML =
+    '<p id="prompt">Which item is correct?</p><div role="radiogroup" aria-labelledby="prompt"><label><input type="radio">First choice</label><label><input type="radio">Second choice</label></div>';
+  const pending = CourseraExtractor.extractTranscript();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(await pending).toContain('Which item is correct?\n\nFirst choice\nSecond choice');
 });
 
 describe('isCourseraCoursePage', () => {
