@@ -628,6 +628,12 @@ it('keeps progress, combining details and cancellation inside the source card', 
   expect(card.querySelector('[aria-label^="Edit filename:"]')).toBeNull();
   expect(card.querySelector('.te-status-line [aria-label="Cancel download"]')).not.toBeNull();
   expect(card.querySelector('.te-download-progress button')).toBeNull();
+  const stop = card.querySelector<HTMLButtonElement>(
+    '.te-selection-actions [aria-label="Cancel download"]'
+  )!;
+  expect(stop).not.toBeNull();
+  expect(stop.querySelector('span')?.classList.contains('sr-only')).toBe(false);
+  expect(stop.disabled).toBe(false);
   expect(card.querySelector('progress')?.value).toBe(2);
   expect(card.querySelector('.te-download-progress')?.textContent).toContain('1.0 MB downloaded');
   expect(card.querySelector('.te-download-progress [role="status"]')?.textContent).toContain(
@@ -1136,7 +1142,10 @@ it('downloads all selected items in order and restores completed progress after 
   const resume = [...container.querySelectorAll('button')].find(
     button => button.textContent === 'Download'
   );
-  expect(resume?.disabled).toBe(false);
+  expect(resume?.disabled).toBe(true);
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Select all (2)"]')?.checked).toBe(
+    false
+  );
 });
 it('automatically downloads a ready item once and remembers that completion', async () => {
   vi.useFakeTimers();
@@ -1165,6 +1174,12 @@ it('honors an unchecked item in the collection list', async () => {
   expect(Object.keys(writes)).toHaveLength(2);
   expect(chrome.tabs.update).not.toHaveBeenCalled();
   expect(container.textContent).toContain('1/2 videos saved');
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Select Item 1"]')?.checked).toBe(
+    false
+  );
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Select Item 2"]')?.checked).toBe(
+    false
+  );
 });
 it.each(['Download all again', 'Skip completed items', 'Cancel'])(
   'asks once before starting a selection with completed items: %s',
@@ -1204,6 +1219,34 @@ it('allows a completed single item to be downloaded again after confirmation', a
   expect(publishFile).not.toHaveBeenCalled();
   await click('Download all again');
   expect(publishFile).toHaveBeenCalledTimes(2);
+});
+
+it('unchecks successful items and retains failures for retry after a mixed result', async () => {
+  listing = [1, 2].map(id => ({
+    id: String(id),
+    title: `Item ${id}`,
+    url: `https://www.udemy.com/course/test/learn/lecture/${id}`,
+  }));
+  const send = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) =>
+    (args[1] as { type: string }).type === 'EXTRACT_TRANSCRIPT' && currentUrl === listing[1].url
+      ? { success: false, error: 'Extraction failed.' }
+      : send(...args)
+  );
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: false,
+    transcript: true,
+    automatic: false,
+  });
+  await render();
+  await click('Download');
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Select Item 1"]')?.checked).toBe(
+    false
+  );
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Select Item 2"]')?.checked).toBe(
+    true
+  );
+  expect(container.textContent).toContain('1 failed');
 });
 
 it('resumes a failed queue without repeating a completed video', async () => {
@@ -2059,7 +2102,11 @@ it('downloads an Udemy queue while a YouTube queue is transferring and cancels o
     /1 video(?: & transcript| \/ no transcript) downloaded/
   );
   expect(Object.values(writes).filter(writer => writer.close.mock.calls.length)).toHaveLength(1);
-  await clickWorker(42, 'Cancel');
+  const stop = container.querySelector<HTMLButtonElement>(
+    '[data-worker="42"] .te-selection-actions [aria-label="Cancel download"]'
+  )!;
+  expect(stop.querySelector('span')?.classList.contains('sr-only')).toBe(false);
+  await act(async () => stop.click());
   expect(Object.values(writes).filter(writer => writer.abort.mock.calls.length)).toHaveLength(1);
   expect(container.querySelector('[data-worker="43"]')!.textContent).toMatch(
     /1 video(?: & transcript| \/ no transcript) downloaded/

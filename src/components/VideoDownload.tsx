@@ -868,7 +868,7 @@ export function VideoDownload({
             parent: item.parent || section.parent,
             sequence: item.sequence || sequence,
             url: item.url,
-            selected: item.available !== false,
+            selected: item.available !== false && previous?.selected !== false,
             available: item.available !== false,
             status:
               item.available === false
@@ -1110,6 +1110,12 @@ export function VideoDownload({
         });
       report(err);
     } finally {
+      if (next.some(item => item.selected && item.status === 'completed')) {
+        for (const item of next) {
+          if (item.status === 'completed') item.selected = false;
+        }
+        await persistItems(next, root).catch(report);
+      }
       working.current = false;
       setBusy(false);
       controller.current = null;
@@ -1220,6 +1226,7 @@ export function VideoDownload({
                   ? {
                       ...item,
                       status: result.status,
+                      selected: result.status === 'completed' ? false : item.selected,
                       saved: result.saved,
                       error: result.warning || undefined,
                     }
@@ -1449,17 +1456,17 @@ export function VideoDownload({
       </div>
     );
   }
-  function renderCancel() {
+  function renderCancel(compact = false) {
     return (
       <button
         type="button"
-        className="te-text-button te-cancel-button"
+        className={`${compact ? 'te-text-button' : 'te-btn'} te-cancel-button`}
         title="Cancel download"
         aria-label="Cancel download"
         onClick={() => controller.current?.abort()}
       >
         <X size={12} aria-hidden="true" />
-        <span className="sr-only">Cancel</span>
+        <span className={compact ? 'sr-only' : undefined}>Cancel</span>
       </button>
     );
   }
@@ -1503,7 +1510,7 @@ export function VideoDownload({
     return (
       <div className="te-status-line">
         <span className="te-preview-status te-muted">{label}</span>
-        {single && item.status === 'downloading' && renderCancel()}
+        {single && busy && renderCancel(true)}
         {(item.status === 'completed' || item.status === 'partial') && renderLocation(item)}
       </div>
     );
@@ -1663,7 +1670,7 @@ export function VideoDownload({
                         ? 'Completed'
                         : 'Ready'}
                 </span>
-                {busy && renderCancel()}
+                {busy && renderCancel(true)}
               </div>
             )}
           </div>
@@ -1898,14 +1905,18 @@ export function VideoDownload({
             </div>
           </details>
         )}
-        {items.length > 1 && (
+        {(items.length > 1 || busy) && (
           <div className="te-selection-actions" aria-label="Selected downloads">
-            <span className="te-muted text-xs" role="status">
-              {selectedItems.length} selected
-              {!!selectedItems.length &&
-                !pendingItems.length &&
-                ' · Already downloaded or unavailable'}
-            </span>
+            {items.length > 1 ? (
+              <span className="te-muted text-xs" role="status">
+                {selectedItems.length} selected
+                {!!selectedItems.length &&
+                  !pendingItems.length &&
+                  ' · Already downloaded or unavailable'}
+              </span>
+            ) : (
+              <span className="te-muted text-xs">Downloading</span>
+            )}
             {busy ? renderCancel() : renderDownload()}
           </div>
         )}

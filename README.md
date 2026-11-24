@@ -115,6 +115,8 @@ Video, audio and transcript files use the subject title by default, or the custo
 A background filename listener preserves that name when Chrome processes blob downloads.
 When selected items are marked Completed, Download asks once whether to download all selected items again,
 skip completed items, or cancel. This uses saved completion status, not a check of files on disk.
+Completed items are unchecked after a run; failed and unfinished selections remain available for retry.
+The sticky action bar shows a visible Cancel button during downloads, including single items.
 Downloading all again also downloads partially saved resources again; existing files remain unchanged
 and Chrome adds a numbered suffix to new copies. A completed single item offers Download again.
 Video and transcript files are handed to Chrome Downloads with no Save As dialog. Chrome resolves
