@@ -1235,6 +1235,25 @@ export function VideoDownload({
             ? !!getSaved(single, preferences).audio
             : getSaved(single, preferences).transcript
     : false;
+  const selectedItems = items.filter(item => item.selected);
+  const pendingItems = selectedItems.filter(
+    item => item.available !== false && item.status !== 'completed' && item.status !== 'skipped'
+  );
+  function renderDownload() {
+    return (
+      <button
+        type="button"
+        className="te-btn-primary te-download-button"
+        disabled={
+          busy || qualityLoading || sourceClosed || !context || !validChoice || !pendingItems.length
+        }
+        onClick={() => void runQueue()}
+      >
+        <Download size={15} />
+        Download
+      </button>
+    );
+  }
   function renderRetry() {
     return (
       <button
@@ -1656,23 +1675,7 @@ export function VideoDownload({
                         )}
                     </select>
                   )}
-                  <button
-                    className="te-btn-primary te-download-button"
-                    disabled={
-                      busy ||
-                      qualityLoading ||
-                      !context ||
-                      !validChoice ||
-                      !items.some(
-                        item =>
-                          item.selected && item.status !== 'completed' && item.status !== 'skipped'
-                      )
-                    }
-                    onClick={() => void runQueue()}
-                  >
-                    <Download size={15} />
-                    Download
-                  </button>
+                  {items.length === 1 && renderDownload()}
                 </div>
               )}
             {single && renderStatus(single, true, true)}
@@ -1842,6 +1845,17 @@ export function VideoDownload({
               </ul>
             </div>
           </details>
+        )}
+        {items.length > 1 && (
+          <div className="te-selection-actions" aria-label="Selected downloads">
+            <span className="te-muted text-xs" role="status">
+              {selectedItems.length} selected
+              {!!selectedItems.length &&
+                !pendingItems.length &&
+                ' · Already downloaded or unavailable'}
+            </span>
+            {busy ? renderCancel() : renderDownload()}
+          </div>
         )}
       </section>
       <dialog

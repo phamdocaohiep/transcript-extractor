@@ -413,6 +413,32 @@ it('shows a single video directly with selection on its preview and no duplicate
     'Ready'
   );
 });
+it('keeps one download action with the selected list and explains completed selections', async () => {
+  listing.push({
+    id: '2',
+    title: 'Second item',
+    url: 'https://www.udemy.com/course/test/learn/lecture/2',
+  });
+  stored['download_completed:https://www.udemy.com/course/test/learn/lecture/1'] = {
+    video: true,
+    transcript: true,
+  };
+  await render();
+  const actions = container.querySelector('[aria-label="Selected downloads"]')!;
+  expect(actions).not.toBeNull();
+  expect(container.querySelectorAll('.te-download-button')).toHaveLength(1);
+  expect(
+    actions.compareDocumentPosition(container.querySelector('.te-item-details')!) &
+      Node.DOCUMENT_POSITION_PRECEDING
+  ).toBeTruthy();
+  const selection = container.querySelector<HTMLInputElement>('[aria-label="Select Second item"]')!;
+  await act(async () => selection.click());
+  expect(actions.textContent).toContain('1 selected');
+  expect(actions.textContent).toContain('Already downloaded');
+  expect(actions.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(true);
+  await act(async () => selection.click());
+  expect(actions.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(false);
+});
 it.each([
   { reload: false, ready: true },
   { reload: true, ready: true },
