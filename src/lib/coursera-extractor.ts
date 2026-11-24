@@ -454,11 +454,19 @@ export class CourseraExtractor {
         link.querySelector('[data-testid="item-title"], .item-title') || link
       ).textContent?.trim();
       if (!title) continue;
-      const section =
-        link
-          .closest('section, .rc-Module, [data-testid*="module"]')
-          ?.querySelector('h2,h3')
-          ?.textContent?.trim() || 'Course items';
+      let section = '';
+      for (
+        let container = link.parentElement;
+        container && container !== root.body;
+        container = container.parentElement
+      ) {
+        const heading = container.querySelector('h2,h3,h4');
+        if (heading?.textContent?.trim()) {
+          section = heading.textContent.trim();
+          break;
+        }
+      }
+      section ||= 'Course items';
       url.search = '';
       url.hash = '';
       found.push({
@@ -584,6 +592,15 @@ export class CourseraExtractor {
       title:
         document
           .querySelector('[data-testid="course-title"], .course-title')
+          ?.textContent?.trim() ||
+        [...document.querySelectorAll<HTMLAnchorElement>('a[href]')]
+          .find(link => {
+            try {
+              return new URL(link.href).pathname === `${prefix}/home/welcome`;
+            } catch {
+              return false;
+            }
+          })
           ?.textContent?.trim() ||
         document.querySelector('h1')?.textContent?.trim() ||
         'Coursera',

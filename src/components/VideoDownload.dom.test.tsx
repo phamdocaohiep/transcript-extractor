@@ -93,7 +93,11 @@ let textPages: Set<string>;
 let hasPlayer = true;
 let hasSources = true;
 let listing: { id: string; title: string; url: string; kind?: string }[];
+let collectionTitle: string | undefined;
+let sectionTitle: string | undefined;
 beforeEach(() => {
+  collectionTitle = undefined;
+  sectionTitle = undefined;
   vi.mocked(extractAudio).mockClear();
   nextDownloadId = 0;
   vi.mocked(publishFile).mockClear();
@@ -172,7 +176,13 @@ beforeEach(() => {
       }),
       sendMessage: vi.fn(async (_id: number, request: { type: string }) => {
         if (request.type === 'GET_DOWNLOAD_ITEMS')
-          return { success: true, data: { sections: [{ lectures: listing }] } };
+          return {
+            success: true,
+            data: {
+              title: collectionTitle,
+              sections: [{ title: sectionTitle, lectures: listing }],
+            },
+          };
         if (request.type === 'EXTRACT_TRANSCRIPT')
           return { success: true, data: 'Transcript from current page.' };
         return {
@@ -374,6 +384,29 @@ it('keeps an unavailable assessment failure separate and continues saving other 
   expect(container.textContent).toContain('1 failed');
   expect(container.textContent).toContain('No visible test questions');
   expect(chrome.tabs.reload).not.toHaveBeenCalled();
+});
+it.each([
+  'https://www.coursera.org/learn/test/lecture/v1/subject',
+  'https://www.youtube.com/watch?v=aaaaaaaaaaa&list=PL123',
+])('saves all output types below collection/group folders for %s', async url => {
+  currentUrl = url;
+  collectionTitle = 'Collection / name';
+  sectionTitle = 'Group: one';
+  listing = [{ id: 'v1', kind: 'video', title: 'Subject name', url }];
+  chrome.scripting = { executeScript: vi.fn(async () => []) } as unknown as typeof chrome.scripting;
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    audio: true,
+    transcript: true,
+    automatic: false,
+  });
+  await render();
+  await click('Download');
+  expect(vi.mocked(publishFile).mock.calls.map(call => call[3])).toEqual([
+    'Collection _ name/Group_ one/Subject name.md',
+    'Collection _ name/Group_ one/Subject name.mp4',
+    'Collection _ name/Group_ one/Subject name-audio.m4a',
+  ]);
 });
 it('detects available HLS qualities and downloads the selected resolution', async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;

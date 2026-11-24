@@ -99,7 +99,10 @@ All of this is derived from the transcript by selection and statistics, so nothi
 
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
-Files save automatically to Chrome's default downloads folder. No helper, terminal command,
+Files save automatically below Chrome's default downloads folder as
+`Course or playlist name/Group name/Subject name.ext`.
+Coursera uses the outline group heading; YouTube playlists use `Playlist Videos`.
+Single items without a group use `Videos`. Video, audio and transcript share the same destination. No helper, terminal command,
 folder connection or File System Access grant is required for new downloads.
 Use the small **Save as** action below a video's title to edit its filename before downloading.
 Video and Markdown use the same name; unsafe path characters are replaced and existing files are not

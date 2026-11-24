@@ -1,4 +1,4 @@
-import { outputNameKey, validOutputName } from './download-names';
+import { outputNameKey, validOutputName, validOutputPath } from './download-names';
 
 /** Stage large output on browser-owned disk, without a user-selected directory. */
 export async function createDestination() {
@@ -11,18 +11,20 @@ export async function createDestination() {
 export async function publishFile(
   directory: FileSystemDirectoryHandle,
   filename: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  path = filename
 ): Promise<number> {
   signal.throwIfAborted();
   if (!validOutputName(filename)) throw new Error('Invalid output filename.');
+  if (!validOutputPath(path)) throw new Error('Invalid output path.');
   const file = await (await directory.getFileHandle(filename)).getFile();
   const url = URL.createObjectURL(file);
   try {
-    await chrome.storage.session.set({ [outputNameKey(url)]: filename });
+    await chrome.storage.session.set({ [outputNameKey(url)]: path });
     signal.throwIfAborted();
     const id = await chrome.downloads.download({
       url,
-      filename,
+      filename: path,
       saveAs: false,
       conflictAction: 'uniquify',
     });

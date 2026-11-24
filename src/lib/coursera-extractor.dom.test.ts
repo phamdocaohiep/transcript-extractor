@@ -11,6 +11,20 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { CourseraExtractor } from './coursera-extractor';
 
 const LECTURE = '/learn/machine-learning/lecture/abc123/gradient-descent';
+it('keeps the course title separate from the subject and reads each outline group', () => {
+  document.body.innerHTML =
+    '<a href="/learn/machine-learning/home/welcome">Course name</a><h1>Current subject</h1><section><h3>Module 1</h3><div><h4>Group A</h4><ul><li><a href="/learn/machine-learning/lecture/a/one">Subject one</a></li></ul></div><div><h4>Group B</h4><ul><li><a href="/learn/machine-learning/lecture/b/two">Subject two</a></li></ul></div></section>';
+  const result = CourseraExtractor.extractCourseStructure();
+  expect(result.title).toBe('Course name');
+  expect(
+    result.sections.find((section: { title: string }) => section.title === 'Group A').lectures[0]
+      .title
+  ).toBe('Subject one');
+  expect(
+    result.sections.find((section: { title: string }) => section.title === 'Group B').lectures[0]
+      .title
+  ).toBe('Subject two');
+});
 
 it.each([
   ['assignment-submission/cKYHt/practice-quiz', 'quiz'],

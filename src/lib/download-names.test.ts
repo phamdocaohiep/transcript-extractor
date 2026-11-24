@@ -61,3 +61,16 @@ it('releases Chrome when the mapping cannot be read', async () => {
   listener({ url, byExtensionId: 'test-id' } as chrome.downloads.DownloadItem, suggest);
   await vi.waitFor(() => expect(suggest).toHaveBeenCalledExactlyOnceWith());
 });
+it('preserves nested output paths when Chrome determines the filename', async () => {
+  (chrome.storage.session.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    [outputNameKey(url)]: 'Khóa học/Nhóm bài/Chủ đề.md',
+  });
+  const suggest = vi.fn();
+  listener({ url, byExtensionId: 'test-id' } as chrome.downloads.DownloadItem, suggest);
+  await vi.waitFor(() =>
+    expect(suggest).toHaveBeenCalledExactlyOnceWith({
+      filename: 'Khóa học/Nhóm bài/Chủ đề.md',
+      conflictAction: 'uniquify',
+    })
+  );
+});

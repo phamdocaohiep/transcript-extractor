@@ -67,6 +67,27 @@ it('publishes through Chrome with no save dialog, preserves filename and waits f
   expect(chrome.storage.session.remove).toHaveBeenCalledWith('output-name:blob:extension-test');
   expect(chrome.downloads.onChanged.removeListener).toHaveBeenCalled();
 });
+it('keeps staging flat while Chrome receives the course/group/subject path', async () => {
+  await publishFile(directory, 'Subject.mp4', signal.signal, 'Course name/Group name/Subject.mp4');
+  expect(directory.getFileHandle).toHaveBeenCalledWith('Subject.mp4');
+  expect(chrome.downloads.download).toHaveBeenCalledWith(
+    expect.objectContaining({ filename: 'Course name/Group name/Subject.mp4' })
+  );
+  expect(chrome.storage.session.set).toHaveBeenCalledWith({
+    'output-name:blob:extension-test': 'Course name/Group name/Subject.mp4',
+  });
+});
+it.each([
+  '/Course/Subject.mp4',
+  'Course/../Subject.mp4',
+  'Course//Subject.mp4',
+  'Course/./Subject.mp4',
+])('rejects unsafe output paths %s', async path => {
+  await expect(publishFile(directory, 'Subject.mp4', signal.signal, path)).rejects.toThrow(
+    'Invalid output path'
+  );
+  expect(chrome.downloads.download).not.toHaveBeenCalled();
+});
 it('does not report a Chrome transfer as completed before the completion event', async () => {
   (chrome.downloads.search as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
     { id: 42, state: 'in_progress' },

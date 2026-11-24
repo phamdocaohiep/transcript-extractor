@@ -5,6 +5,9 @@ export const outputNameKey = (url: string) => `${PREFIX}${url}`;
 export function validOutputName(value: unknown): value is string {
   return typeof value === 'string' && !!value.trim() && !/[/\\\p{Cc}]|^\.{1,2}$/u.test(value);
 }
+export function validOutputPath(value: unknown): value is string {
+  return typeof value === 'string' && value.split('/').every(validOutputName);
+}
 
 /** Chrome may ignore DownloadOptions.filename when any extension listens for naming. */
 export function installNames() {
@@ -20,7 +23,7 @@ export function installNames() {
     void chrome.storage.session.get(key).then(
       values => {
         const name: unknown = values[key];
-        suggest(validOutputName(name) ? { filename: name, conflictAction: 'uniquify' } : undefined);
+        suggest(validOutputPath(name) ? { filename: name, conflictAction: 'uniquify' } : undefined);
       },
       () => suggest()
     );

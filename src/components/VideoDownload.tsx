@@ -545,9 +545,11 @@ export function VideoDownload({
   async function savePrepared(...args: Parameters<typeof saveDownload>) {
     setTransferring(true);
     try {
-      args[8] = itemsRef.current.find(
+      const item = itemsRef.current.find(
         item => item.url && lectureId(item.url, '') === lectureId(args[0].url, '')
-      )?.filename;
+      );
+      args[8] = item?.filename;
+      args[9] = [title || args[0].title, item?.section || 'Videos'];
       return await saveDownload(...args);
     } finally {
       setTransferring(false);

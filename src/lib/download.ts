@@ -279,7 +279,8 @@ export async function saveDownload(
   progress: (completed: number, total: number, bytes: number) => void,
   notice: (value: string) => void,
   trace?: Trace,
-  filename?: string
+  filename?: string,
+  folders: string[] = []
 ): Promise<{ audioSaved: boolean; warning?: string }> {
   await assertEntitlement();
   signal.throwIfAborted();
@@ -296,6 +297,7 @@ export async function saveDownload(
   let warning = '';
   try {
     const base = safeVideoName(filename?.trim() || context.title);
+    const pathFor = (name: string) => [...folders.map(safeVideoName), name].join('/');
     if (preferences.transcript) {
       const state = (await chrome.storage.local.get('transcriptExtractorState'))
         .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;
@@ -314,7 +316,7 @@ export async function saveDownload(
         signal.throwIfAborted();
         await writer.close();
         notice('Saving transcript to Chrome Downloads…');
-        const downloadId = await publishFile(folder, `${base}.md`, signal);
+        const downloadId = await publishFile(folder, `${base}.md`, signal, pathFor(`${base}.md`));
         await recordFile(completionKey(context.url), {
           downloadId,
           name: `${base}.md`,
@@ -395,7 +397,7 @@ export async function saveDownload(
         await writer.close();
         if (preferences.video) {
           notice('Saving video to Chrome Downloads…');
-          const downloadId = await publishFile(folder, filename, signal);
+          const downloadId = await publishFile(folder, filename, signal, pathFor(filename));
           await recordFile(completionKey(context.url), {
             downloadId,
             name: filename,
@@ -419,7 +421,7 @@ export async function saveDownload(
               `${base}-audio`,
               signal
             );
-            const downloadId = await publishFile(folder, name, signal);
+            const downloadId = await publishFile(folder, name, signal, pathFor(name));
             await recordFile(completionKey(context.url), {
               downloadId,
               name,
