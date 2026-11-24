@@ -22,6 +22,9 @@ beforeEach(() => {
     },
   });
   vi.stubGlobal('chrome', {
+    storage: {
+      session: { set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined) },
+    },
     downloads: {
       download: vi.fn(async () => 42),
       search: vi.fn(async () => [{ id: 42, state: 'complete' }]),
@@ -58,6 +61,10 @@ it('publishes through Chrome with no save dialog, preserves filename and waits f
     conflictAction: 'uniquify',
   });
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:extension-test');
+  expect(chrome.storage.session.set).toHaveBeenCalledWith({
+    'output-name:blob:extension-test': 'My video.mp4',
+  });
+  expect(chrome.storage.session.remove).toHaveBeenCalledWith('output-name:blob:extension-test');
   expect(chrome.downloads.onChanged.removeListener).toHaveBeenCalled();
 });
 it('does not report a Chrome transfer as completed before the completion event', async () => {

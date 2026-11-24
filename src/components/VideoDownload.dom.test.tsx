@@ -180,7 +180,7 @@ beforeEach(() => {
           data: {
             protocolVersion: 4,
             url: currentUrl,
-            title: 'First lecture',
+            title: listing.find(item => item.url === currentUrl)?.title || 'First lecture',
             sources: hasSources && !textPages.has(currentUrl) ? [videoUrl] : [],
             hasPlayer: hasPlayer && !textPages.has(currentUrl),
             loading: false,
@@ -309,6 +309,11 @@ it('exports audio along with video and transcript and remembers all three artifa
     'transcript',
     'video',
     'audio',
+  ]);
+  expect(vi.mocked(recordFile).mock.calls.map(([, file]) => file.name)).toEqual([
+    'Video.md',
+    'Video.mp4',
+    'Video-audio.m4a',
   ]);
 });
 it('publishes only audio when video and transcript are unchecked', async () => {

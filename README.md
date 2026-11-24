@@ -103,9 +103,11 @@ Files save automatically to Chrome's default downloads folder. No helper, termin
 folder connection or File System Access grant is required for new downloads.
 Use the small **Save as** action below a video's title to edit its filename before downloading.
 Video and Markdown use the same name; unsafe path characters are replaced and existing files are not
-overwritten (a short suffix is added on collision). The original video title remains in the Markdown heading.
+overwritten (Chrome adds a numbered suffix on collision). The original video title remains in the Markdown heading.
 The **Timestamps** export switch also applies to Markdown saved alongside videos: enabled preserves
 available source timestamps, disabled removes them. Missing source timing is not fabricated.
+Video, audio and transcript files use the subject title by default, or the custom Save As name.
+A background filename listener preserves that name when Chrome processes blob downloads.
 Video and transcript files are handed to Chrome Downloads with no Save As dialog. Chrome resolves
 filename collisions without overwriting an existing file. The quality is not marked saved until Chrome
 reports completion. The small folder icon **beside Completed** uses Chrome's **Show in Finder** action

@@ -295,8 +295,7 @@ export async function saveDownload(
   let audioSaved = false;
   let warning = '';
   try {
-    let base = safeVideoName(filename || context.title);
-    if (!filename?.trim()) base += `-${crypto.randomUUID().slice(0, 8)}`;
+    const base = safeVideoName(filename?.trim() || context.title);
     if (preferences.transcript) {
       const state = (await chrome.storage.local.get('transcriptExtractorState'))
         .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;

@@ -1,7 +1,9 @@
 import { handleBatchRequest } from './lib/batch-controller';
+import { installNames } from './lib/download-names';
+installNames();
 import { ALARM_NAME, checkSubscription, configureSubscription, scheduleSubscription, setMockDevices } from './lib/subscription';
 /**
- * The extension's one background job: capturing a frame from a keystroke.
+ * Capture a frame from a keystroke; also handle collection, subscription and download events.
  *
  * It exists because capture needs `chrome.tabs.captureVisibleTab`, and that is
  * doubly out of reach from the lecture page. A content script has no
@@ -11,8 +13,7 @@ import { ALARM_NAME, checkSubscription, configureSubscription, scheduleSubscript
  * and why the shortcut has to be declared in the manifest rather than listened
  * for on the page the way the note shortcut is.
  *
- * Nothing else belongs here. The worker is torn down between events, so it can
- * hold no state, and everything it needs it asks the page for.
+ * The worker may restart between events; download names are read from session storage.
  */
 
 import { classifyFrame, cropRectFor, type CapturedFrame } from './lib/frame-capture';
