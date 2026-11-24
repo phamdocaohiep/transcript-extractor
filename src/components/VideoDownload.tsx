@@ -193,6 +193,14 @@ export function VideoDownload({
   const requesting = useRef(false);
   const continueQueue = useRef<() => Promise<void>>(async () => undefined);
   const accessDialog = useRef<HTMLDialogElement>(null);
+  const restartDialog = useRef<HTMLDialogElement>(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  useEffect(() => {
+    const dialog = restartDialog.current;
+    if (!dialog) return;
+    if (active && confirmRestart && !dialog.open) dialog.showModal();
+    else if ((!active || !confirmRestart) && dialog.open) dialog.close();
+  }, [active, confirmRestart]);
   useEffect(() => {
     const dialog = accessDialog.current;
     if (!dialog) return;
@@ -548,8 +556,13 @@ export function VideoDownload({
       const item = itemsRef.current.find(
         item => item.url && lectureId(item.url, '') === lectureId(args[0].url, '')
       );
-      args[8] = item?.filename;
-      args[9] = [title || args[0].title, item?.section || 'Videos'];
+      const sequence = item?.sequence || (item ? itemsRef.current.indexOf(item) + 1 : 1);
+      args[8] = `${String(sequence).padStart(3, '0')} - ${item?.filename?.trim() || args[0].title}`;
+      args[9] = [
+        title || args[0].title,
+        ...(item?.parent ? [item.parent] : []),
+        item?.section || 'Videos',
+      ];
       return await saveDownload(...args);
     } finally {
       setTransferring(false);
@@ -797,8 +810,10 @@ export function VideoDownload({
         storedQueues[legacyQueueKey(current.url)]) as DownloadItem[] | undefined;
       const seen = new Set<string>();
       const next: DownloadItem[] = [];
+      let sequence = 0;
       for (const section of sections) {
         for (const item of section.lectures ?? []) {
+          sequence++;
           if (item.kind === 'quiz' || item.kind === 'article') {
             if (
               !/(^|\.)coursera\.org$/.test(new URL(current.url).hostname) ||
@@ -850,6 +865,8 @@ export function VideoDownload({
             filename: previous?.filename,
             title: item.title || 'Untitled',
             section: section.title,
+            parent: item.parent || section.parent,
+            sequence: item.sequence || sequence,
             url: item.url,
             selected: item.available !== false,
             available: item.available !== false,
@@ -965,7 +982,15 @@ export function VideoDownload({
       chrome.permissions.onAdded?.removeListener(granted);
     };
   }, [hosts]);
-  async function runQueue(resume = false) {
+  function startQueue() {
+    if (working.current || sourceClosed) return;
+    if (
+      items.some(item => item.selected && item.available !== false && item.status === 'completed')
+    )
+      setConfirmRestart(true);
+    else void runQueue();
+  }
+  async function runQueue(resume = false, restart = false) {
     if (working.current || !context) return;
     working.current = true;
     if (!resume) trace.current = startRun('manual', tabId);
@@ -979,7 +1004,16 @@ export function VideoDownload({
     const abort = new AbortController();
     controller.current = abort;
     const root = context.url;
-    const next = items.map(item => ({ ...item }));
+    const next = items.map(item =>
+      restart && item.selected && item.available !== false && item.status !== 'skipped'
+        ? {
+            ...item,
+            status: 'pending' as const,
+            saved: { video: false, transcript: false, audio: false },
+            error: undefined,
+          }
+        : { ...item }
+    );
     try {
       const batch = (await chrome.storage.local.get('course_batch_state')).course_batch_state as
         | { isActive?: boolean; isPaused?: boolean }
@@ -1094,6 +1128,7 @@ export function VideoDownload({
   useEffect(() => {
     if (
       !loaded ||
+      confirmRestart ||
       !preferences.automatic ||
       (!preferences.video && !preferences.transcript && !preferences.audio)
     )
@@ -1213,7 +1248,7 @@ export function VideoDownload({
     return () => clearInterval(timer);
     // The timer is renewed whenever the saved preferences or destination change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, preferences]);
+  }, [loaded, preferences, confirmRestart]);
 
   const archive = /(^|\.)coursera\.org$/.test(
     new URL(context?.url || 'https://example.test').hostname
@@ -1247,9 +1282,14 @@ export function VideoDownload({
         type="button"
         className="te-btn-primary te-download-button"
         disabled={
-          busy || qualityLoading || sourceClosed || !context || !validChoice || !pendingItems.length
+          busy ||
+          qualityLoading ||
+          sourceClosed ||
+          !context ||
+          !validChoice ||
+          !selectedItems.some(item => item.available !== false && item.status !== 'skipped')
         }
-        onClick={() => void runQueue()}
+        onClick={startQueue}
       >
         <Download size={15} />
         Download
@@ -1681,6 +1721,16 @@ export function VideoDownload({
                 </div>
               )}
             {single && renderStatus(single, true, true)}
+            {single?.status === 'completed' && (
+              <button
+                type="button"
+                className="te-text-button"
+                disabled={busy || sourceClosed}
+                onClick={startQueue}
+              >
+                Download again
+              </button>
+            )}
             {error && error !== single?.error && !(single && listFailed) && (
               <div className="te-item-status" role="alert">
                 <span>Failed · {error}</span>
@@ -1899,6 +1949,46 @@ export function VideoDownload({
               setError('Video access was not granted. Click Download to try again.');
             }}
           >
+            Cancel
+          </button>
+        </div>
+      </dialog>
+      <dialog
+        ref={restartDialog}
+        aria-labelledby="restart-title"
+        className="te-glass fixed inset-0 m-auto max-w-[calc(100%-2rem)] w-96 p-5 backdrop:bg-black/60"
+        style={{ background: 'var(--te-bg)', color: 'var(--te-text)' }}
+        onCancel={() => setConfirmRestart(false)}
+      >
+        <div className="flex flex-col gap-4">
+          <h2 id="restart-title" className="font-semibold">
+            Download completed items again?
+          </h2>
+          <p>
+            Some selected items are marked Completed. This uses saved status; files on disk are not
+            checked.
+          </p>
+          <button
+            className="te-btn-primary"
+            disabled={busy || sourceClosed}
+            onClick={() => {
+              setConfirmRestart(false);
+              void runQueue(false, true);
+            }}
+          >
+            Download all again
+          </button>
+          <button
+            className="te-btn"
+            disabled={busy || sourceClosed}
+            onClick={() => {
+              setConfirmRestart(false);
+              void runQueue();
+            }}
+          >
+            Skip completed items
+          </button>
+          <button className="te-btn" onClick={() => setConfirmRestart(false)}>
             Cancel
           </button>
         </div>

@@ -19,6 +19,8 @@ export interface DownloadItem {
   title: string;
   url?: string;
   section?: string;
+  parent?: string;
+  sequence?: number;
   selected: boolean;
   status: 'pending' | 'downloading' | 'completed' | 'partial' | 'failed' | 'skipped';
   error?: string;

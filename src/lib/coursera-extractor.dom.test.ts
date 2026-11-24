@@ -11,11 +11,26 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { CourseraExtractor } from './coursera-extractor';
 
 const LECTURE = '/learn/machine-learning/lecture/abc123/gradient-descent';
-it('keeps the course title separate from the subject and reads each outline group', () => {
+it('keeps the course title separate from the subject and reads each outline group', async () => {
+  window.history.pushState({}, '', '/learn/machine-learning/lecture/a/one');
   document.body.innerHTML =
     '<a href="/learn/machine-learning/home/welcome">Course name</a><h1>Current subject</h1><section><h3>Module 1</h3><div><h4>Group A</h4><ul><li><a href="/learn/machine-learning/lecture/a/one">Subject one</a></li></ul></div><div><h4>Group B</h4><ul><li><a href="/learn/machine-learning/lecture/b/two">Subject two</a></li></ul></div></section>';
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(''))
+  );
+  await CourseraExtractor.loadAllItems(new AbortController().signal);
   const result = CourseraExtractor.extractCourseStructure();
   expect(result.title).toBe('Course name');
+  expect(result.sections.map((section: { parent?: string }) => section.parent)).toEqual([
+    'Module 1',
+    'Module 1',
+  ]);
+  expect(
+    result.sections
+      .flatMap((section: { lectures: { sequence: number }[] }) => section.lectures)
+      .map((item: { sequence: number }) => item.sequence)
+  ).toEqual([1, 2]);
   expect(
     result.sections.find((section: { title: string }) => section.title === 'Group A').lectures[0]
       .title
@@ -24,6 +39,31 @@ it('keeps the course title separate from the subject and reads each outline grou
     result.sections.find((section: { title: string }) => section.title === 'Group B').lectures[0]
       .title
   ).toBe('Subject two');
+});
+
+it('keeps equal group names in separate modules and numbers across both modules', async () => {
+  window.history.pushState({}, '', '/learn/machine-learning/reading/a/one');
+  document.body.innerHTML = `<a href="/learn/machine-learning/home/welcome">Course name</a>
+    <section><h3><span>Module 1</span> Introduction</h3><div><h4>Summary</h4><a href="/learn/machine-learning/reading/a/one">First summary</a></div></section>
+    <section><h3><span>Module 2</span>Fundamentals</h3><div><h4>Summary</h4><a href="/learn/machine-learning/reading/b/two">Second summary</a></div></section>`;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(''))
+  );
+  await CourseraExtractor.loadAllItems(new AbortController().signal);
+  const result = CourseraExtractor.extractCourseStructure();
+  expect(result.sections).toMatchObject([
+    {
+      title: 'Summary',
+      parent: 'Module 1 - Introduction',
+      lectures: [{ title: 'First summary', sequence: 1 }],
+    },
+    {
+      title: 'Summary',
+      parent: 'Module 2 - Fundamentals',
+      lectures: [{ title: 'Second summary', sequence: 2 }],
+    },
+  ]);
 });
 
 it.each([
@@ -73,6 +113,10 @@ it('discovers all linked modules in order, retaining videos, readings, practice 
     'video',
   ]);
   expect(items.find((item: { title: string }) => item.title === 'Locked').available).toBe(false);
+  expect(result.sections.slice(0, 2)).toMatchObject([
+    { title: 'Course items', parent: 'Module 1' },
+    { title: 'Course items', parent: 'Module 2' },
+  ]);
   expect(JSON.stringify(result)).not.toContain('/learn/other/');
   expect(fetcher).toHaveBeenCalledTimes(2);
   expect(fetcher.mock.calls.every(([url]) => /\/home\//.test(url))).toBe(true);

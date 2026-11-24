@@ -100,8 +100,10 @@ All of this is derived from the transcript by selection and statistics, so nothi
 Open a lecture and click the extension icon to open its side panel. Downloads run in **Main**
 while the source website stays open. Set Video, Transcript and automatic downloading in **Settings**.
 Files save automatically below Chrome's default downloads folder as
-`Course or playlist name/Group name/Subject name.ext`.
-Coursera uses the outline group heading; YouTube playlists use `Playlist Videos`.
+`Course or playlist name/Group name/001 - Subject name.ext`.
+Coursera adds its module heading before the group: `Course name/Module name/Group name/001 - Subject name.ext`.
+Sequence numbers follow the full outline order and stay the same when only some items are selected.
+YouTube playlists use `Playlist Videos` as the group.
 Single items without a group use `Videos`. Video, audio and transcript share the same destination. No helper, terminal command,
 folder connection or File System Access grant is required for new downloads.
 Use the small **Save as** action below a video's title to edit its filename before downloading.
@@ -111,6 +113,10 @@ The **Timestamps** export switch also applies to Markdown saved alongside videos
 available source timestamps, disabled removes them. Missing source timing is not fabricated.
 Video, audio and transcript files use the subject title by default, or the custom Save As name.
 A background filename listener preserves that name when Chrome processes blob downloads.
+When selected items are marked Completed, Download asks once whether to download all selected items again,
+skip completed items, or cancel. This uses saved completion status, not a check of files on disk.
+Downloading all again also downloads partially saved resources again; existing files remain unchanged
+and Chrome adds a numbered suffix to new copies. A completed single item offers Download again.
 Video and transcript files are handed to Chrome Downloads with no Save As dialog. Chrome resolves
 filename collisions without overwriting an existing file. The quality is not marked saved until Chrome
 reports completion. The small folder icon **beside Completed** uses Chrome's **Show in Finder** action

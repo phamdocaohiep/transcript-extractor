@@ -92,7 +92,14 @@ let stored: Record<string, unknown>;
 let textPages: Set<string>;
 let hasPlayer = true;
 let hasSources = true;
-let listing: { id: string; title: string; url: string; kind?: string }[];
+let listing: {
+  id: string;
+  title: string;
+  url: string;
+  kind?: string;
+  parent?: string;
+  sequence?: number;
+}[];
 let collectionTitle: string | undefined;
 let sectionTitle: string | undefined;
 beforeEach(() => {
@@ -321,9 +328,9 @@ it('exports audio along with video and transcript and remembers all three artifa
     'audio',
   ]);
   expect(vi.mocked(recordFile).mock.calls.map(([, file]) => file.name)).toEqual([
-    'Video.md',
-    'Video.mp4',
-    'Video-audio.m4a',
+    '001 - Video.md',
+    '001 - Video.mp4',
+    '001 - Video-audio.m4a',
   ]);
 });
 it('publishes only audio when video and transcript are unchecked', async () => {
@@ -392,7 +399,16 @@ it.each([
   currentUrl = url;
   collectionTitle = 'Collection / name';
   sectionTitle = 'Group: one';
-  listing = [{ id: 'v1', kind: 'video', title: 'Subject name', url }];
+  listing = [
+    {
+      id: 'v1',
+      kind: 'video',
+      title: 'Subject name',
+      url,
+      sequence: 7,
+      ...(url.includes('coursera') ? { parent: 'Module 1' } : {}),
+    },
+  ];
   chrome.scripting = { executeScript: vi.fn(async () => []) } as unknown as typeof chrome.scripting;
   vi.mocked(loadPreferences).mockResolvedValue({
     video: true,
@@ -402,10 +418,11 @@ it.each([
   });
   await render();
   await click('Download');
+  const path = `Collection _ name/${url.includes('coursera') ? 'Module 1/' : ''}Group_ one/007 - Subject name`;
   expect(vi.mocked(publishFile).mock.calls.map(call => call[3])).toEqual([
-    'Collection _ name/Group_ one/Subject name.md',
-    'Collection _ name/Group_ one/Subject name.mp4',
-    'Collection _ name/Group_ one/Subject name-audio.m4a',
+    `${path}.md`,
+    `${path}.mp4`,
+    `${path}-audio.m4a`,
   ]);
 });
 it('detects available HLS qualities and downloads the selected resolution', async () => {
@@ -473,7 +490,7 @@ it('keeps one download action with the selected list and explains completed sele
   await act(async () => selection.click());
   expect(actions.textContent).toContain('1 selected');
   expect(actions.textContent).toContain('Already downloaded');
-  expect(actions.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(true);
+  expect(actions.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(false);
   await act(async () => selection.click());
   expect(actions.querySelector<HTMLButtonElement>('.te-download-button')!.disabled).toBe(false);
 });
@@ -1119,7 +1136,7 @@ it('downloads all selected items in order and restores completed progress after 
   const resume = [...container.querySelectorAll('button')].find(
     button => button.textContent === 'Download'
   );
-  expect(resume?.disabled).toBe(true);
+  expect(resume?.disabled).toBe(false);
 });
 it('automatically downloads a ready item once and remembers that completion', async () => {
   vi.useFakeTimers();
@@ -1149,6 +1166,46 @@ it('honors an unchecked item in the collection list', async () => {
   expect(chrome.tabs.update).not.toHaveBeenCalled();
   expect(container.textContent).toContain('1/2 videos saved');
 });
+it.each(['Download all again', 'Skip completed items', 'Cancel'])(
+  'asks once before starting a selection with completed items: %s',
+  async action => {
+    listing = [1, 2].map(id => ({
+      id: String(id),
+      title: `Item ${id}`,
+      url: `https://www.udemy.com/course/test/learn/lecture/${id}`,
+    }));
+    stored[`download_completed:${listing[0].url}`] = { video: true, transcript: true };
+    await render();
+    await click('Download');
+    const dialog = container.querySelector<HTMLDialogElement>('[aria-labelledby="restart-title"]')!;
+    expect(dialog.open).toBe(true);
+    expect(dialog.textContent).toContain('files on disk are not checked');
+    expect(publishFile).not.toHaveBeenCalled();
+    await act(async () =>
+      [...dialog.querySelectorAll('button')].find(button => button.textContent === action)!.click()
+    );
+    expect(dialog.open).toBe(false);
+    const names = vi.mocked(publishFile).mock.calls.map(call => call[1]);
+    expect(names).toEqual(
+      action === 'Cancel'
+        ? []
+        : action === 'Skip completed items'
+          ? ['002 - Item 2.md', '002 - Item 2.mp4']
+          : ['001 - Item 1.md', '001 - Item 1.mp4', '002 - Item 2.md', '002 - Item 2.mp4']
+    );
+    expect(chrome.downloads.search).not.toHaveBeenCalled();
+    expect(chrome.downloads.removeFile).not.toHaveBeenCalled();
+  }
+);
+it('allows a completed single item to be downloaded again after confirmation', async () => {
+  stored[`download_completed:${listing[0].url}`] = { video: true, transcript: true };
+  await render();
+  await click('Download again');
+  expect(publishFile).not.toHaveBeenCalled();
+  await click('Download all again');
+  expect(publishFile).toHaveBeenCalledTimes(2);
+});
+
 it('resumes a failed queue without repeating a completed video', async () => {
   vi.mocked(loadPreferences).mockResolvedValue({
     video: true,
@@ -1323,7 +1380,7 @@ it('uses an editable filename and preserves it across Settings without changing 
   expect(container.textContent).toContain('First lecture');
   expect(container.querySelector<HTMLInputElement>('.te-filename-input')?.value).toBe('My video');
   await click('Download');
-  expect(Object.keys(writes).sort()).toEqual(['My video.md', 'My video.mp4']);
+  expect(Object.keys(writes).sort()).toEqual(['001 - My video.md', '001 - My video.mp4']);
 });
 it('updates automatic completion after navigating to a new source and returning from Settings', async () => {
   vi.useFakeTimers();

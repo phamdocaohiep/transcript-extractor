@@ -354,6 +354,7 @@ export class CourseraExtractor {
     url: string;
     kind: 'video' | 'article' | 'quiz';
     section: string;
+    parent?: string;
     available: boolean;
   }> = [];
   private static group = '';
@@ -455,16 +456,24 @@ export class CourseraExtractor {
       ).textContent?.trim();
       if (!title) continue;
       let section = '';
+      let parent = '';
       for (
         let container = link.parentElement;
         container && container !== root.body;
         container = container.parentElement
       ) {
-        const heading = container.querySelector('h2,h3,h4');
-        if (heading?.textContent?.trim()) {
-          section = heading.textContent.trim();
-          break;
+        const headings = [...container.querySelectorAll('h2,h3,h4')];
+        section ||= headings[0]?.textContent?.trim() || '';
+        const label = headings
+          .find(heading => /^Module\s+\d+/i.test(heading.textContent?.trim() || ''))
+          ?.textContent?.trim();
+        if (!parent && label) {
+          if (section === label) section = 'Course items';
+          parent = label.replace(/^(Module\s+\d+)\s*(.*)$/i, (_, number, name) =>
+            name ? `${number} - ${name}` : number
+          );
         }
+        if (section && parent) break;
       }
       section ||= 'Course items';
       url.search = '';
@@ -474,6 +483,7 @@ export class CourseraExtractor {
         title,
         url: url.href,
         section,
+        ...(parent ? { parent } : {}),
         kind:
           match[1] === 'lecture'
             ? 'video'
@@ -582,12 +592,22 @@ export class CourseraExtractor {
         section: 'Current item',
         available: true,
       });
-    const sections = [...new Set(items.map(item => item.section))].map(title => ({
-      title,
-      lectures: items
-        .filter(item => item.section === title)
-        .map(item => ({ ...item, isCompleted: false, duration: 'Unknown' })),
-    }));
+    const sections: Array<{ title: string; parent?: string; lectures: unknown[] }> = [];
+    items.forEach((item, index) => {
+      let section = sections.find(
+        value => value.title === item.section && value.parent === item.parent
+      );
+      if (!section) {
+        section = { title: item.section, parent: item.parent, lectures: [] };
+        sections.push(section);
+      }
+      section.lectures.push({
+        ...item,
+        sequence: index + 1,
+        isCompleted: false,
+        duration: 'Unknown',
+      });
+    });
     return {
       title:
         document
