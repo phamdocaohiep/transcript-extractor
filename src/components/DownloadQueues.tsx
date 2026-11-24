@@ -180,7 +180,9 @@ export function DownloadQueues({
             hidden={entries.length > 0 && !grouped.length && !message}
           >
             {message && <p role="status">{message}</p>}
-            {!entries.length && <p>Switch to a YouTube or Udemy tab to start downloading.</p>}
+            {!entries.length && (
+              <p>Switch to a YouTube, Udemy or Coursera tab to start downloading.</p>
+            )}
             <ul className="flex flex-col gap-2">
               {grouped.map((entry, index) => {
                 const state = states[entry.id];

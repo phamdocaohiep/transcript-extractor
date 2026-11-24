@@ -23,6 +23,8 @@ import { classifyError, type Trace } from './diagnostics';
 import { recordFile } from './preferences';
 import { createDestination, publishFile } from './download-manager';
 import { parseTranscript } from './transcript';
+import { extractAudio, writeAudioSource } from './audio-file';
+import type { SavedFiles } from './download-types';
 
 export const completionKey = (url: string, choice?: Pick<Preferences, 'format' | 'maxHeight'>) =>
   `download_completed:${lectureId(url, '')}${choice && (choice.format || choice.maxHeight) ? `:quality:${selectionKey(choice)}` : ''}`;
@@ -50,6 +52,7 @@ export class SelectionUnavailable extends Error {
 export type DownloadPlan =
   | HlsPlan
   | { kind: 'file'; url: string; extension: 'mp4' }
+  | { kind: 'audio-file'; url: string; extension: 'm4a' }
   | TrackPlan
   | AdaptivePlan;
 export async function checkHosts(urls: string[], trace?: Trace) {
@@ -277,15 +280,20 @@ export async function saveDownload(
   notice: (value: string) => void,
   trace?: Trace,
   filename?: string
-): Promise<void> {
+): Promise<{ audioSaved: boolean; warning?: string }> {
   await assertEntitlement();
   signal.throwIfAborted();
-  if (!preferences.video && !preferences.transcript) throw new Error('Choose video or transcript.');
-  if (preferences.video && (!plan || context.protected))
+  if (!preferences.video && !preferences.transcript && !preferences.audio)
+    throw new Error('Choose video, audio or transcript.');
+  if ((preferences.video || preferences.audio) && (!plan || context.protected))
     throw new Error('No supported video is ready.');
+  if (preferences.video && plan?.kind === 'audio-file')
+    throw new Error('This source exposes audio only.');
   if (preferences.transcript && !transcript.trim()) throw new Error('No transcript is ready.');
   const destination = await createDestination();
   const folder = destination.directory;
+  let audioSaved = false;
+  let warning = '';
   try {
     let base = safeVideoName(filename || context.title);
     if (!filename?.trim()) base += `-${crypto.randomUUID().slice(0, 8)}`;
@@ -293,7 +301,7 @@ export async function saveDownload(
       const state = (await chrome.storage.local.get('transcriptExtractorState'))
         .transcriptExtractorState as { includeTimestamps?: boolean } | undefined;
       const text =
-        state?.includeTimestamps === false
+        state?.includeTimestamps === false && context.kind !== 'article' && context.kind !== 'quiz'
           ? parseTranscript(transcript.replace(/\n(?=\[\d{1,2}:\d{2}(?::\d{2})?\])/g, '\n\n'))
               .map(cue => cue.text)
               .join('\n')
@@ -308,7 +316,11 @@ export async function saveDownload(
         await writer.close();
         notice('Saving transcript to Chrome Downloads…');
         const downloadId = await publishFile(folder, `${base}.md`, signal);
-        await recordFile(completionKey(context.url), { downloadId, name: `${base}.md` });
+        await recordFile(completionKey(context.url), {
+          downloadId,
+          name: `${base}.md`,
+          kind: 'transcript',
+        });
         trace?.('file_saved', { format: 'transcript', extension: 'md' });
       } catch (error) {
         await writer.abort().catch(() => undefined);
@@ -316,12 +328,19 @@ export async function saveDownload(
         throw error;
       }
     }
-    if (preferences.video && plan) {
-      const filename = `${base}.${plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4'}`;
+    if ((preferences.video || preferences.audio) && plan) {
+      const filename = `${base}.${plan.kind === 'tracks' || plan.kind === 'adaptive' || plan.kind === 'audio-file' ? plan.extension : 'mp4'}`;
       let writer: FileSystemWritableFileStream | undefined;
       try {
         writer = await (await folder.getFileHandle(filename, { create: true })).createWritable();
-        if (plan.kind === 'file') {
+        if (plan.kind === 'audio-file') {
+          await writeAudioSource(
+            await fetchVideo(plan.url, signal, undefined, {}, trace),
+            bytes => writer!.write(bytes as BufferSource),
+            signal,
+            bytes => progress(0, 0, bytes)
+          );
+        } else if (plan.kind === 'file') {
           await writeMediaFile(
             await fetchVideo(plan.url, signal, undefined, {}, trace),
             bytes => writer!.write(bytes as BufferSource),
@@ -375,17 +394,52 @@ export async function saveDownload(
         }
         signal.throwIfAborted();
         await writer.close();
-        notice('Saving video to Chrome Downloads…');
-        const downloadId = await publishFile(folder, filename, signal);
-        await recordFile(completionKey(context.url), {
-          downloadId,
-          name: filename,
-          selection: selectionKey(preferences),
-        });
-        trace?.('file_saved', {
-          format: 'video',
-          extension: plan.kind === 'tracks' || plan.kind === 'adaptive' ? plan.extension : 'mp4',
-        });
+        if (preferences.video) {
+          notice('Saving video to Chrome Downloads…');
+          const downloadId = await publishFile(folder, filename, signal);
+          await recordFile(completionKey(context.url), {
+            downloadId,
+            name: filename,
+            kind: 'video',
+            selection: selectionKey(preferences),
+          });
+          trace?.('file_saved', {
+            format: 'video',
+            extension:
+              plan.kind === 'tracks' || plan.kind === 'adaptive' || plan.kind === 'audio-file'
+                ? plan.extension
+                : 'mp4',
+          });
+        }
+        if (preferences.audio) {
+          try {
+            notice('Extracting the audio track…');
+            const name = await extractAudio(
+              await (await folder.getFileHandle(filename)).getFile(),
+              folder,
+              `${base}-audio`,
+              signal
+            );
+            const downloadId = await publishFile(folder, name, signal);
+            await recordFile(completionKey(context.url), {
+              downloadId,
+              name,
+              kind: 'audio',
+              selection: selectionKey(preferences),
+            });
+            audioSaved = true;
+            trace?.('file_saved', {
+              format: 'audio',
+              extension: name.endsWith('.mp3') ? 'mp3' : name.endsWith('.webm') ? 'webm' : 'm4a',
+            });
+          } catch (err) {
+            signal.throwIfAborted();
+            if (!preferences.video && !preferences.transcript) throw err;
+            warning =
+              'Other files saved; audio unavailable: ' +
+              (err instanceof Error ? err.message : 'Audio export failed.');
+          }
+        }
       } catch (error) {
         await writer?.abort().catch(() => undefined);
         await folder.removeEntry(filename).catch(() => undefined);
@@ -395,19 +449,22 @@ export async function saveDownload(
       }
     }
     notice(
-      `Saved ${preferences.video ? 'video' : ''}${preferences.video && preferences.transcript ? ' and ' : ''}${preferences.transcript ? 'transcript' : ''} to Chrome Downloads.`
+      `Saved ${[preferences.video && 'video', audioSaved && 'audio', preferences.transcript && 'transcript'].filter(Boolean).join(' and ')} to Chrome Downloads.`
     );
     const key = completionKey(context.url, preferences);
     const sharedKey = completionKey(context.url);
     await navigator.locks.request(`completion-${sharedKey}`, { mode: 'exclusive' }, async () => {
       const stored = await chrome.storage.local.get([key, sharedKey]);
-      const previous = stored[key] as { video?: boolean; transcript?: boolean } | undefined;
+      const previous = stored[key] as Partial<SavedFiles> | undefined;
       const shared = stored[sharedKey] as { video?: boolean; transcript?: boolean } | undefined;
       await chrome.storage.local.set({
         [key]: {
           video: preferences.video || previous?.video === true,
           transcript:
             preferences.transcript || previous?.transcript === true || shared?.transcript === true,
+          ...(preferences.audio || previous?.audio
+            ? { audio: audioSaved || previous?.audio === true }
+            : {}),
         },
         ...(key !== sharedKey
           ? {
@@ -419,6 +476,7 @@ export async function saveDownload(
           : {}),
       });
     });
+    return { audioSaved, ...(warning ? { warning } : {}) };
   } finally {
     await destination.dispose().catch(() => undefined);
   }

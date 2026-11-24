@@ -48,8 +48,8 @@ interface Fields {
   source?: 'youtube' | 'udemy' | 'other';
   protocol?: 'sabr' | 'hls' | 'tracks' | 'file';
   result?: 'completed' | 'partial' | 'failed' | 'skipped' | 'cancelled';
-  format?: 'video' | 'transcript';
-  extension?: 'mp4' | 'webm' | 'md';
+  format?: 'video' | 'transcript' | 'audio';
+  extension?: 'mp4' | 'webm' | 'md' | 'm4a' | 'mp3';
   permission?: 'host' | 'directory';
   origin?: string;
   origins?: string[];
@@ -122,8 +122,8 @@ const choices: Record<string, string[]> = {
   source: ['youtube', 'udemy', 'other'],
   protocol: ['sabr', 'hls', 'tracks', 'file'],
   result: ['completed', 'partial', 'failed', 'skipped', 'cancelled'],
-  format: ['video', 'transcript'],
-  extension: ['mp4', 'webm', 'md'],
+  format: ['video', 'transcript', 'audio'],
+  extension: ['mp4', 'webm', 'md', 'm4a', 'mp3'],
   permission: ['host', 'directory'],
 };
 

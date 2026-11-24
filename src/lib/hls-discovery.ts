@@ -6,6 +6,7 @@ export interface VideoDownloadContext {
   url: string;
   title: string;
   sources: string[];
+  audioSources?: string[];
   protected: boolean;
   hasPlayer?: boolean;
   loading?: boolean;

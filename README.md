@@ -168,6 +168,31 @@ HLS MPEG-TS and fragmented MP4 are saved as standard MP4 with their original aud
 Direct MP4 is saved as supplied. Standard AES-128 HLS is supported. DRM, SAMPLE-AES, DASH, live streams,
 separate audio/video playlists and discontinuities requiring additional remuxing remain unsupported.
 
+### Coursera downloads
+
+On the `codex/coursera-downloads` branch, open a signed-in Coursera course under `/learn/` and open
+the downloader. It collects video, reading, practice-quiz and final-exam links from the rendered
+outline and linked module pages. Select the entries to download. If modules are missing, open the
+course outline and retry discovery; the extension reports discovered items, not a guaranteed complete
+catalog of content hidden behind Coursera's application state.
+
+**Settings → Audio file** additionally exports the compressed audio track as M4A, MP3 or WebM,
+depending on its codec. Audio is off by default and can be used without saving the video.
+**Readings and visible tests** controls Markdown exports for non-video entries. Video captions come
+from visible transcript text, loaded text-track cues or exposed VTT/SRT download links. Original
+timestamps are retained when the Timestamps export setting is enabled. No subtitles are generated
+when the source provides none.
+
+Practice/final tests export only questions and options already visible in your authorized session.
+These Markdown files are snapshots, not interactive tests or complete question banks. The extension
+does not start attempts, submit responses, reveal hidden answers or unlock restricted items. If an
+attempt must be opened first, that entry reports an error and the queue continues. Protected or
+unavailable media is reported rather than bypassed. Chrome Downloads manages all output files;
+the saved-file location and delete-resources controls also cover audio and document exports.
+
+Coverage includes synthetic Coursera DOM/queue regression tests and real AAC/Opus remux fixtures.
+Signed-in Coursera behavior still needs live verification; the development chat has no browser access.
+
 ### YouTube downloads
 
 Open a YouTube watch page or Short in the Chrome profile where you are signed in, then open the

@@ -165,6 +165,7 @@ class ContentScript {
           try {
             if (UdemyExtractor.isUdemyCoursePage()) await UdemyExtractor.loadAllItems(controller.signal);
             if (YouTubeExtractor.isPlaylistPage()) await YouTubeExtractor.loadAllItems(controller.signal);
+            if (CourseraExtractor.isCourseraCoursePage()) await CourseraExtractor.loadAllItems(controller.signal);
             controller.signal.throwIfAborted();
             const structure = await this.extractCourseStructure();
             sendResponse({ success: true, data: { ...structure, sourceUrl: window.location.href } });
@@ -252,11 +253,12 @@ class ContentScript {
             protocolVersion: PROTOCOL_VERSION,
             url: window.location.href,
             title: this.getVideoInfo()?.title || document.title,
-            sources: this.hlsSources(),
+            sources: CourseraExtractor.isCourseraCoursePage() ? [...new Set([...CourseraExtractor.getSources(), ...this.hlsSources()])] : this.hlsSources(),
+            ...(CourseraExtractor.isCourseraCoursePage() ? { audioSources: CourseraExtractor.getAudioSources() } : {}),
             protected: Boolean(video?.mediaKeys),
             hasPlayer: Boolean(video),
             thumbnail: video?.poster || document.querySelector<HTMLMetaElement>('meta[property="og:image"]')?.content,
-            kind: /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
+            kind: CourseraExtractor.isCourseraCoursePage() ? CourseraExtractor.getKind() : /\/learn\/quiz\//.test(window.location.pathname) ? 'quiz' : current?.kind,
             loading: document.readyState !== 'complete' || Boolean(document.querySelector('[data-purpose="video-player-loading"], [data-purpose="loading-spinner"]')),
           } });
           break;

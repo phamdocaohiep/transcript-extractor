@@ -20,8 +20,8 @@ import { groupKey } from '../lib/identity';
 import { resolvePlayback, canRetryDownload } from '../lib/playback';
 import { readStreams, selectStreams } from '../lib/stream-discovery';
 import { loadPreferences, savePreferences } from '../lib/preferences';
-import type { DownloadItem, Preferences } from '../lib/download-types';
-import { selectionKey } from '../lib/download-types';
+import type { DownloadItem, Preferences, SavedFiles } from '../lib/download-types';
+import { selectionKey, requiredFiles } from '../lib/download-types';
 import { getSaved, getCounts } from '../lib/result-state';
 import { startRun, classifyError, type Trace } from '../lib/diagnostics';
 
@@ -93,6 +93,7 @@ export function VideoDownload({
     unique: number;
   } | null>(null);
   const [listFailed, setListFailed] = useState(false);
+  const [listNotice, setListNotice] = useState('');
   const [renditions, setRenditions] = useState<Rendition[]>([]);
   const [qualityNotice, setQualityNotice] = useState('');
   const [qualityLoading, setQualityLoading] = useState(false);
@@ -171,7 +172,7 @@ export function VideoDownload({
       const id = lectureId(url, '');
       if (!itemsRef.current.some(item => item.url && lectureId(item.url, '') === id)) return;
       const value = settings.current;
-      automaticAttempt.current = `${id}:${value.video}:${value.transcript}:${selectionKey(value)}`;
+      automaticAttempt.current = `${id}:${value.video}:${value.transcript}:${selectionKey(value)}:${!!value.audio}:${value.materials !== false}`;
       setItems(previous =>
         previous.map(item =>
           item.url && lectureId(item.url, '') === id
@@ -447,7 +448,9 @@ export function VideoDownload({
       if (
         value.video !== preferences.video ||
         value.transcript !== preferences.transcript ||
-        selectionKey(value) !== selectionKey(preferences)
+        selectionKey(value) !== selectionKey(preferences) ||
+        value.audio !== preferences.audio ||
+        value.materials !== preferences.materials
       ) {
         setItems([]);
         removed.current.clear();
@@ -470,16 +473,24 @@ export function VideoDownload({
       throw new Error('This player uses DRM. Protected video is not supported.');
     let nextPlan: DownloadPlan | null = null;
     try {
-      nextPlan = includeVideo
-        ? await prepareVideo(
-            selected,
-            signal,
-            next.streams,
-            next.adaptive,
-            trace.current,
-            preferences
-          )
-        : null;
+      nextPlan =
+        includeVideo &&
+        preferences.audio &&
+        !next.sources.length &&
+        !next.streams?.length &&
+        !next.adaptive &&
+        next.audioSources?.length
+          ? { kind: 'audio-file', url: next.audioSources[0], extension: 'm4a' }
+          : includeVideo
+            ? await prepareVideo(
+                selected,
+                signal,
+                next.streams,
+                next.adaptive,
+                trace.current,
+                preferences
+              )
+            : null;
     } catch (err) {
       if (err instanceof SelectionUnavailable) resetSelection.current = true;
       throw err;
@@ -514,7 +525,11 @@ export function VideoDownload({
     signal: AbortSignal,
     includeVideo = preferences.video
   ) {
-    if (!includeVideo) return next;
+    if (
+      !includeVideo ||
+      (next.audioSources?.length && !next.sources.length && !next.streams?.length && !next.adaptive)
+    )
+      return next;
     return resolvePlayback(
       next.url,
       pageContext,
@@ -533,7 +548,7 @@ export function VideoDownload({
       args[8] = itemsRef.current.find(
         item => item.url && lectureId(item.url, '') === lectureId(args[0].url, '')
       )?.filename;
-      await saveDownload(...args);
+      return await saveDownload(...args);
     } finally {
       setTransferring(false);
     }
@@ -541,20 +556,37 @@ export function VideoDownload({
   async function saveWithRetry(
     next: VideoDownloadContext,
     signal: AbortSignal,
-    saved = { video: false, transcript: false }
+    saved: SavedFiles = { video: false, transcript: false }
   ) {
+    const requested = requiredFiles(
+      /(^|\.)coursera\.org$/.test(new URL(next.url).hostname) ? next : {},
+      preferences
+    );
     const choice = {
       ...preferences,
-      video: preferences.video && !saved.video,
-      transcript: preferences.transcript && !saved.transcript,
+      video: requested.video && !saved.video,
+      transcript: requested.transcript && !saved.transcript,
+      audio: requested.audio && !saved.audio,
     };
+    let missingVideo = false;
+    if (
+      choice.audio &&
+      next.audioSources?.length &&
+      !next.sources.length &&
+      !next.streams?.length &&
+      !next.adaptive
+    ) {
+      missingVideo = choice.video;
+      choice.video = false;
+    }
     let current = next;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        current = await recover(current, signal, choice.video);
+        current = await recover(current, signal, choice.video || choice.audio);
         if (
-          choice.video &&
+          (choice.video || choice.audio) &&
           current.hasPlayer === false &&
+          !current.audioSources?.length &&
           !current.sources.length &&
           !selectStreams(current.streams || []) &&
           !current.adaptive
@@ -579,7 +611,7 @@ export function VideoDownload({
             current,
             null,
             result.text,
-            { ...choice, video: false },
+            { ...choice, video: false, audio: false },
             signal,
             (completed, total, bytes) => setProgress({ completed, total, bytes }),
             setNotice,
@@ -595,30 +627,42 @@ export function VideoDownload({
           current,
           current.sources[0] || source,
           signal,
-          choice.video,
+          choice.video || choice.audio,
           choice.transcript,
-          preferences.video && saved.video
+          saved.video || !!saved.audio
         );
         const actual = { ...choice, transcript: choice.transcript && !!result.text.trim() };
-        if (actual.video || actual.transcript)
-          await savePrepared(
-            current,
-            result.plan,
-            result.text,
-            actual,
-            signal,
-            (completed, total, bytes) => setProgress({ completed, total, bytes }),
-            setNotice,
-            trace.current
-          );
+        const output =
+          actual.video || actual.audio || actual.transcript
+            ? await savePrepared(
+                current,
+                result.plan,
+                result.text,
+                actual,
+                signal,
+                (completed, total, bytes) => setProgress({ completed, total, bytes }),
+                setNotice,
+                trace.current
+              )
+            : undefined;
+        const warning = [
+          result.warning,
+          output?.warning,
+          missingVideo ? 'This item exposes audio only; video is unavailable.' : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
         setContext(current);
         if (result.warning) setNotice(result.warning);
         return {
-          status: result.warning ? ('partial' as const) : ('completed' as const),
-          warning: result.warning,
+          status: warning ? ('partial' as const) : ('completed' as const),
+          warning,
           saved: {
             video: saved.video || actual.video,
             transcript: saved.transcript || actual.transcript,
+            ...(requested.audio || saved.audio
+              ? { audio: saved.audio || output?.audioSaved === true }
+              : {}),
           },
         };
       } catch (err) {
@@ -687,7 +731,7 @@ export function VideoDownload({
       setSource(current.sources[0] || '');
       loadedList.current = '';
       // Retry reconnects and resets the row; only Download starts another transfer.
-      automaticAttempt.current = `${lectureId(current.url, '')}:${settings.current.video}:${settings.current.transcript}:${selectionKey(settings.current)}`;
+      automaticAttempt.current = `${lectureId(current.url, '')}:${settings.current.video}:${settings.current.transcript}:${selectionKey(settings.current)}:${!!settings.current.audio}:${settings.current.materials !== false}`;
     } catch (err) {
       report(err);
     } finally {
@@ -697,7 +741,7 @@ export function VideoDownload({
     }
   }
   const legacyQueueKey = (url: string) =>
-    `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}${preferences.format || preferences.maxHeight ? `:quality:${selectionKey(preferences)}` : ''}`;
+    `download_queue:${groupKey(url)}:${preferences.video}:${preferences.transcript}${preferences.format || preferences.maxHeight ? `:quality:${selectionKey(preferences)}` : ''}${preferences.audio ? ':audio:true' : ''}${preferences.materials === false ? ':materials:false' : ''}`;
   const queueKey = (url: string) => `${legacyQueueKey(url)}:tab:${tabId}`;
   async function persistItems(value: DownloadItem[], url: string) {
     listedGroup.current = groupKey(url);
@@ -732,9 +776,10 @@ export function VideoDownload({
       if (!response?.success) throw new Error(response?.error || 'Could not load the item list.');
       if (response.data?.sourceUrl && groupKey(response.data.sourceUrl) !== groupKey(current.url))
         throw new Error('The source changed while reading its videos. Retry to reconnect.');
-      loadedList.current = `${groupKey(current.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+      loadedList.current = `${groupKey(current.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}:${!!preferences.audio}:${preferences.materials !== false}`;
       setContext(current);
       setTitle(response.data?.title || current.title);
+      setListNotice(typeof response.data?.notice === 'string' ? response.data.notice : '');
       const sections = Array.isArray(response.data?.sections) ? response.data.sections : [];
       const keys = sections.flatMap((section: { lectures?: Array<{ url?: string }> }) =>
         (section.lectures || []).flatMap(item =>
@@ -752,7 +797,21 @@ export function VideoDownload({
       const next: DownloadItem[] = [];
       for (const section of sections) {
         for (const item of section.lectures ?? []) {
-          if (item.kind === 'quiz' || item.kind === 'article') continue;
+          if (item.kind === 'quiz' || item.kind === 'article') {
+            if (
+              !/(^|\.)coursera\.org$/.test(new URL(current.url).hostname) ||
+              preferences.materials === false
+            )
+              continue;
+          }
+          if (
+            item.kind !== 'article' &&
+            item.kind !== 'quiz' &&
+            !preferences.video &&
+            !preferences.audio &&
+            !preferences.transcript
+          )
+            continue;
           if (!item.id || seen.has(item.id)) continue;
           seen.add(item.id);
           const previous = stored?.find(value => value.id === item.id);
@@ -761,7 +820,7 @@ export function VideoDownload({
             : { video: false, transcript: false };
           const completed = item.url
             ? (completedFiles[completionKey(item.url, preferences)] as
-                | { video?: boolean; transcript?: boolean }
+                | Partial<SavedFiles>
                 | undefined)
             : undefined;
           const shared = item.url
@@ -769,19 +828,23 @@ export function VideoDownload({
             : undefined;
           const saved = {
             video: previousFiles.video || completed?.video === true,
+            ...(preferences.audio || previousFiles.audio || completed?.audio
+              ? { audio: previousFiles.audio || completed?.audio === true }
+              : {}),
             transcript:
               previousFiles.transcript ||
               completed?.transcript === true ||
               shared?.transcript === true,
           };
+          const required = requiredFiles(item, preferences);
           const complete =
-            (preferences.video || preferences.transcript) &&
-            (!preferences.video || saved.video) &&
-            (!preferences.transcript || saved.transcript);
-          const partial =
-            preferences.video && saved.video && preferences.transcript && !saved.transcript;
+            (!required.video || saved.video) &&
+            (!required.transcript || saved.transcript) &&
+            (!required.audio || saved.audio);
+          const partial = !complete && (saved.video || saved.transcript || saved.audio);
           next.push({
             id: item.id,
+            ...(item.kind ? { kind: item.kind } : {}),
             filename: previous?.filename,
             title: item.title || 'Untitled',
             section: section.title,
@@ -819,6 +882,10 @@ export function VideoDownload({
           'Only the current video is available. Retry the list to load the remaining videos.'
         );
       }
+      if (!next.length && /(^|\.)coursera\.org$/.test(new URL(current.url).hostname))
+        throw new Error(
+          'No requested items were discovered. Open the course outline and retry the list.'
+        );
       if (!next.length) {
         const key = completionKey(current.url, preferences);
         const base = completionKey(current.url);
@@ -945,7 +1012,7 @@ export function VideoDownload({
               throw new Error('The source tab left this collection.');
             setContext(current);
             setSource(current.sources[0] || '');
-            automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+            automaticAttempt.current = `${lectureId(current.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}:${!!preferences.audio}:${preferences.materials !== false}`;
             trace.current('discovery', {
               source: /(^|\.)youtube\.com$/.test(new URL(current.url).hostname)
                 ? 'youtube'
@@ -989,7 +1056,7 @@ export function VideoDownload({
         }
         const counts = getCounts(next, preferences);
         setNotice(
-          `Finished: ${counts.saved} saved, ${counts.partial ? `${counts.partial} video saved without transcript, ` : ''}${counts.skipped} without video, ${counts.failed} failed.`
+          `Finished: ${counts.saved} saved, ${counts.partial ? `${counts.partial} ${preferences.audio || /(^|\.)coursera\.org$/.test(new URL(root).hostname) ? 'partially saved' : 'video saved without transcript'}, ` : ''}${counts.skipped} without video, ${counts.failed} failed.`
         );
         trace.current('run_finished', {
           total: counts.total,
@@ -1015,7 +1082,7 @@ export function VideoDownload({
   const loadedList = useRef('');
   useEffect(() => {
     if (!loaded || busy || !context) return;
-    const key = `${groupKey(context.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+    const key = `${groupKey(context.url)}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}:${!!preferences.audio}:${preferences.materials !== false}`;
     if (loadedList.current === key) return;
     loadedList.current = key;
     void loadItems();
@@ -1023,7 +1090,11 @@ export function VideoDownload({
 
   // A persistent download tab watches the source tab while automatic downloading is enabled.
   useEffect(() => {
-    if (!loaded || !preferences.automatic || (!preferences.video && !preferences.transcript))
+    if (
+      !loaded ||
+      !preferences.automatic ||
+      (!preferences.video && !preferences.transcript && !preferences.audio)
+    )
       return;
     const timer = setInterval(() => {
       if (working.current || closed.current) return;
@@ -1037,7 +1108,8 @@ export function VideoDownload({
           if (/(^|\.)youtube\.com$/.test(address.hostname) && address.pathname === '/playlist')
             return;
           if (
-            preferences.video &&
+            (preferences.video || preferences.audio) &&
+            !next.audioSources?.length &&
             (next.kind === 'video' || next.hasPlayer) &&
             !next.protected &&
             !next.sources.length &&
@@ -1045,7 +1117,7 @@ export function VideoDownload({
             !next.adaptive
           )
             return;
-          const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+          const key = `${lectureId(next.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}:${!!preferences.audio}:${preferences.materials !== false}`;
           if (automaticAttempt.current === key) return;
           automaticAttempt.current = key;
           const marks = await chrome.storage.local.get([
@@ -1053,16 +1125,19 @@ export function VideoDownload({
             completionKey(next.url, preferences),
           ]);
           const selected = marks[completionKey(next.url, preferences)] as
-            | { video?: boolean; transcript?: boolean }
+            | Partial<SavedFiles>
             | undefined;
           const shared = marks[completionKey(next.url)] as { transcript?: boolean } | undefined;
+          const requested = requiredFiles(next, preferences);
           const completed = {
+            audio: selected?.audio,
             video: selected?.video,
             transcript: selected?.transcript || shared?.transcript,
           };
           if (
-            (!preferences.video || completed?.video) &&
-            (!preferences.transcript || completed?.transcript)
+            (!requested.video || completed?.video) &&
+            (!requested.transcript || completed?.transcript) &&
+            (!requested.audio || completed?.audio)
           )
             return;
           working.current = true;
@@ -1080,6 +1155,7 @@ export function VideoDownload({
             const result = await saveWithRetry(next, abort.signal, {
               video: completed?.video === true,
               transcript: completed?.transcript === true,
+              ...(requested.audio ? { audio: completed.audio === true } : {}),
             });
             trace.current('item_result', {
               result: result.status,
@@ -1137,14 +1213,27 @@ export function VideoDownload({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, preferences]);
 
-  const validChoice = preferences.video || preferences.transcript;
+  const archive = /(^|\.)coursera\.org$/.test(
+    new URL(context?.url || 'https://example.test').hostname
+  );
+  const validChoice =
+    preferences.video ||
+    preferences.transcript ||
+    preferences.audio ||
+    (archive && preferences.materials !== false);
   const incomplete = !!listSize && listSize.loaded < listSize.expected;
   const eligible = items.filter(item => item.available !== false);
   const single = items.length === 1 ? items[0] : undefined;
   const downloaded = single
-    ? preferences.video
-      ? getSaved(single, preferences).video
-      : getSaved(single, preferences).transcript
+    ? single.kind === 'article' || single.kind === 'quiz'
+      ? getSaved(single, preferences).transcript
+      : preferences.audio && !getSaved(single, preferences).audio
+        ? false
+        : preferences.video
+          ? getSaved(single, preferences).video
+          : preferences.audio
+            ? !!getSaved(single, preferences).audio
+            : getSaved(single, preferences).transcript
     : false;
   function renderRetry() {
     return (
@@ -1193,7 +1282,7 @@ export function VideoDownload({
           : 'Ready to download again. Older files were not deleted because their filenames were not recorded; remove those files manually.'
       );
       setProgress({ completed: 0, total: 0, bytes: 0 });
-      automaticAttempt.current = `${lectureId(item.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}`;
+      automaticAttempt.current = `${lectureId(item.url, '')}:${preferences.video}:${preferences.transcript}:${selectionKey(preferences)}:${!!preferences.audio}:${preferences.materials !== false}`;
     } catch (err) {
       report(err);
     } finally {
@@ -1203,20 +1292,28 @@ export function VideoDownload({
   }
   function renderStatus(item: DownloadItem, compact = false, detailsOnly = false) {
     const saved = getSaved(item, preferences);
-    const showLabel = !detailsOnly || (compact && (saved.video || saved.transcript));
-    if (!showLabel && !item.error && !saved.video && !saved.transcript) return null;
+    const showLabel = !detailsOnly || (compact && (saved.video || saved.transcript || saved.audio));
+    if (!showLabel && !item.error && !saved.video && !saved.transcript && !saved.audio) return null;
     const label = compact
       ? saved.video
         ? saved.transcript
-          ? '1 video & transcript downloaded'
-          : '1 video / no transcript downloaded'
-        : saved.transcript
-          ? '1 transcript downloaded'
-          : item.status === 'pending'
-            ? 'Ready'
-            : item.status
+          ? saved.audio
+            ? '1 video, audio & transcript downloaded'
+            : '1 video & transcript downloaded'
+          : saved.audio
+            ? '1 video & audio / no transcript downloaded'
+            : '1 video / no transcript downloaded'
+        : saved.audio
+          ? saved.transcript
+            ? '1 audio & transcript downloaded'
+            : '1 audio downloaded'
+          : saved.transcript
+            ? '1 transcript downloaded'
+            : item.status === 'pending'
+              ? 'Ready'
+              : item.status
       : item.status === 'partial'
-        ? 'Video saved; transcript missing'
+        ? 'Partially saved'
         : item.status;
     return (
       <div className="te-item-status">
@@ -1227,7 +1324,9 @@ export function VideoDownload({
             {label}
           </span>
         )}
-        {(getSaved(item, preferences).video || getSaved(item, preferences).transcript) && (
+        {(getSaved(item, preferences).video ||
+          getSaved(item, preferences).transcript ||
+          getSaved(item, preferences).audio) && (
           <>
             <button
               className="te-small-button"
@@ -1241,7 +1340,7 @@ export function VideoDownload({
             </button>
           </>
         )}
-        {item.error && (!compact || !saved.video) && (
+        {item.error && (!compact || !saved.video || (preferences.audio && !saved.audio)) && (
           <span className="te-muted text-sm">
             {showLabel ? ' · ' : ''}
             {item.error}
@@ -1356,6 +1455,19 @@ export function VideoDownload({
         className="te-glass p-3 flex flex-col gap-3"
       >
         <h2 className="font-semibold">Download settings</h2>
+        {archive && (
+          <label>
+            <input
+              type="checkbox"
+              checked={preferences.materials !== false}
+              disabled={busy || settingsLocked || !loaded}
+              onChange={event =>
+                void changePreferences({ ...preferences, materials: event.target.checked })
+              }
+            />{' '}
+            Readings and visible practice/final-test questions (Markdown)
+          </label>
+        )}
         <label>
           <input
             type="checkbox"
@@ -1364,6 +1476,17 @@ export function VideoDownload({
             onChange={e => void changePreferences({ ...preferences, video: e.target.checked })}
           />{' '}
           Video (MP4 / WebM)
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={preferences.audio === true}
+            disabled={busy || settingsLocked || !loaded}
+            onChange={event =>
+              void changePreferences({ ...preferences, audio: event.target.checked })
+            }
+          />{' '}
+          Audio file (M4A / MP3 / WebM)
         </label>
         <label>
           <input
@@ -1418,7 +1541,7 @@ export function VideoDownload({
         >
           Open downloads folder
         </button>
-        {!validChoice && <p role="alert">Choose video or transcript.</p>}
+        {!validChoice && <p role="alert">Choose video, audio or transcript.</p>}
       </section>
       <section
         hidden={screen !== 'main'}
@@ -1494,7 +1617,7 @@ export function VideoDownload({
               !!context &&
               !!items.length && (
                 <div className="te-download-toolbar">
-                  {preferences.video && (
+                  {preferences.video && single?.kind !== 'article' && single?.kind !== 'quiz' && (
                     <select
                       className="te-select te-quality-picker"
                       aria-label="Video quality"
@@ -1564,7 +1687,13 @@ export function VideoDownload({
                 {items.filter(item => item.selected).length} selected ·{' '}
                 {preferences.video && (
                   <>
-                    {counts.video}/{counts.total} videos saved
+                    {counts.video}/{counts.mediaTotal} videos saved
+                  </>
+                )}
+                {preferences.audio && (
+                  <>
+                    {' '}
+                    · {counts.audio}/{counts.mediaTotal} audio saved
                   </>
                 )}
                 {preferences.video && preferences.transcript && ' · '}
@@ -1577,6 +1706,7 @@ export function VideoDownload({
             )}
           </div>
         </div>
+        {listNotice && <p className="te-muted text-xs">{listNotice}</p>}
         {locationNotice && (
           <p role="status" className="te-muted text-xs">
             {locationNotice}
@@ -1613,6 +1743,8 @@ export function VideoDownload({
         single?.status !== 'failed' &&
         !sourceClosed &&
         preferences.video &&
+        single?.kind !== 'article' &&
+        single?.kind !== 'quiz' &&
         !!context &&
         !renditions.length ? (
           <button

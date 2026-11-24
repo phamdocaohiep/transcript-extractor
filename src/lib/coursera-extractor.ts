@@ -1,6 +1,7 @@
 import { log } from './log';
-import { parseTimestamp } from './transcript';
+import { parseTimestamp, formatTimestamp } from './transcript';
 import { errorMessage } from './utils';
+import { parseCaptionFile } from './caption-formats';
 // Coursera Extractor for Transcript Extractor Extension
 // Handles transcript extraction from Coursera course videos
 
@@ -25,12 +26,12 @@ export class CourseraExtractor {
       const url = window.location.href;
       const hostname = window.location.hostname;
       const pathname = window.location.pathname;
-      
-      const isCoursera = hostname.includes('coursera.org');
+
+      const isCoursera = hostname === 'coursera.org' || hostname.endsWith('.coursera.org');
       const isLearn = pathname.includes('/learn/');
       const isLecture = pathname.includes('/lecture/');
       const isReading = pathname.includes('/reading/');
-      
+
       return isCoursera && (isLearn || isLecture || isReading);
     } catch (error) {
       console.error('Error checking Coursera page:', error);
@@ -77,16 +78,18 @@ export class CourseraExtractor {
       }
 
       // Extract title from page
-      const titleElement = document.querySelector('h1, [data-testid="video-title"], .video-title, .reading-title h1');
+      const titleElement = document.querySelector(
+        'h1, [data-testid="video-title"], .video-title, .reading-title h1'
+      );
       const title = titleElement?.textContent?.trim() || 'Coursera Content';
 
       // Extract content ID from URL
       const url = window.location.href;
       let contentId = 'unknown';
-      
-      const lectureMatch = url.match(/\/lecture\/([^/]+)/);
+
+      const lectureMatch = url.match(/\/(?:lecture|quiz|exam)\/([^/]+)/);
       const readingMatch = url.match(/\/reading\/([^/]+)/);
-      
+
       if (lectureMatch) {
         contentId = lectureMatch[1];
       } else if (readingMatch) {
@@ -97,7 +100,7 @@ export class CourseraExtractor {
         title,
         videoId: contentId,
         url,
-        hasTranscript: this.isTranscriptAvailable()
+        hasTranscript: this.isTranscriptAvailable(),
       };
     } catch (error) {
       console.error('Error getting Coursera content info:', error);
@@ -113,10 +116,48 @@ export class CourseraExtractor {
       // Wait for content to load
       await new Promise(resolve => setTimeout(resolve, 2000));
 
+      if (this.getKind() === 'quiz') return this.extractAssessment();
+
       // Try to extract video transcript first
       const transcriptEntries = this.extractTranscriptEntries();
       if (transcriptEntries.length > 0) {
         return this.formatTranscript(transcriptEntries);
+      }
+
+      if (this.getKind() === 'video') {
+        const candidates = document.querySelectorAll<HTMLTrackElement | HTMLAnchorElement>(
+          'video track[src], a[download], .rc-Downloads a[href], [data-testid*="download"] a[href]'
+        );
+        for (const element of candidates) {
+          try {
+            const url = new URL(
+              element instanceof HTMLAnchorElement ? element.href : element.src,
+              location.href
+            );
+            if (
+              url.protocol !== 'https:' ||
+              url.username ||
+              url.password ||
+              (!(element instanceof HTMLTrackElement) && !/\.(vtt|srt)$/i.test(url.pathname))
+            )
+              continue;
+            const response = await fetch(url.href, {
+              credentials: 'include',
+              redirect: 'error',
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!response.ok) continue;
+            const text = await response.text();
+            if (text.length > 4_000_000) continue;
+            const cues = parseCaptionFile(text);
+            if (cues.length)
+              return cues
+                .map(cue => `[${formatTimestamp(cue.startSeconds)}] ${cue.text}`)
+                .join('\n\n');
+          } catch {
+            // A missing or CORS-restricted track must not prevent another exposed track from working.
+          }
+        }
       }
 
       // If no video transcript, try to extract reading content
@@ -126,7 +167,6 @@ export class CourseraExtractor {
       }
 
       throw new Error('No transcript or reading content found. The content may not be available.');
-
     } catch (error) {
       console.error('Error extracting Coursera content:', error);
       throw new Error(`Failed to extract Coursera content: ${errorMessage(error)}`);
@@ -142,8 +182,8 @@ export class CourseraExtractor {
     try {
       // Look for transcript phrases
       const phrases = document.querySelectorAll('.rc-Phrase');
-      
-      phrases.forEach((phrase) => {
+
+      phrases.forEach(phrase => {
         const text = phrase.textContent?.trim();
         if (text) {
           // Try to find associated timestamp
@@ -154,25 +194,33 @@ export class CourseraExtractor {
 
           entries.push({
             timestamp,
-            text
+            text,
           });
         }
       });
 
+      if (!entries.length)
+        for (const video of document.querySelectorAll('video')) {
+          for (const track of Array.from(video.textTracks || []))
+            for (const cue of Array.from(track.cues || [])) {
+              const text = (cue as VTTCue).text?.trim();
+              if (text) entries.push({ timestamp: formatTimestamp(cue.startTime), text });
+            }
+        }
+
       // If no phrases found, try alternative selectors
       if (entries.length === 0) {
         const alternativePhrases = document.querySelectorAll('[data-cue]');
-        alternativePhrases.forEach((phrase) => {
+        alternativePhrases.forEach(phrase => {
           const text = phrase.textContent?.trim();
           if (text) {
             entries.push({
               timestamp: '',
-              text
+              text,
             });
           }
         });
       }
-
     } catch (error) {
       console.error('Error extracting transcript entries:', error);
     }
@@ -217,85 +265,46 @@ export class CourseraExtractor {
    * Format reading content with proper structure
    */
   private static formatReadingContent(container: Element): string {
-    let formattedContent = '';
-
-    // Process all child elements
-    const processElement = (element: Element, depth = 0): void => {
-      const tagName = element.tagName.toLowerCase();
-      const text = element.textContent?.trim() || '';
-
-      if (!text) return;
-
-      // Handle different element types
-      switch (tagName) {
-        case 'h1':
-          formattedContent += `\n# ${text}\n\n`;
-          break;
-        case 'h2':
-          formattedContent += `\n## ${text}\n\n`;
-          break;
-        case 'h3':
-          formattedContent += `\n### ${text}\n\n`;
-          break;
-        case 'h4':
-          formattedContent += `\n#### ${text}\n\n`;
-          break;
-        case 'h5':
-          formattedContent += `\n##### ${text}\n\n`;
-          break;
-        case 'h6':
-          formattedContent += `\n###### ${text}\n\n`;
-          break;
-        case 'p':
-          // Check if it's inside a list item
-          if (element.closest('li')) {
-            formattedContent += `${text}\n`;
-          } else {
-            formattedContent += `${text}\n\n`;
-          }
-          break;
-        case 'li':
-          formattedContent += `- ${text}\n`;
-          break;
-        case 'ul':
-        case 'ol':
-          // Lists are handled by their li elements
-          break;
-        case 'strong':
-        case 'b':
-          formattedContent += `**${text}**`;
-          break;
-        case 'em':
-        case 'i':
-          formattedContent += `*${text}*`;
-          break;
-        case 'code':
-          formattedContent += `\`${text}\``;
-          break;
-        case 'pre':
-          formattedContent += `\n\`\`\`\n${text}\n\`\`\`\n\n`;
-          break;
-        case 'blockquote':
-          formattedContent += `> ${text}\n\n`;
-          break;
-        default:
-          // For other elements, just add the text
-          if (element.children.length === 0) {
-            formattedContent += text;
-          }
-          break;
+    const render = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+      if (!(node instanceof Element)) return '';
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return '';
+      const tag = node.tagName.toLowerCase();
+      if (
+        ['script', 'style', 'input', 'textarea', 'select', 'button'].includes(tag) ||
+        node.matches('[hidden],[aria-hidden="true"]')
+      )
+        return '';
+      const text = [...node.childNodes].map(render).join('');
+      if (/^h[1-6]$/.test(tag)) return `\n${'#'.repeat(Number(tag[1]))} ${text.trim()}\n\n`;
+      if (tag === 'p' || tag === 'div' || tag === 'section') return `${text}\n\n`;
+      if (tag === 'br') return '\n';
+      if (tag === 'li') return `- ${text.trim()}\n`;
+      if (tag === 'pre') return `\n\`\`\`\n${node.textContent}\n\`\`\`\n\n`;
+      if (tag === 'strong' || tag === 'b') return `**${text}**`;
+      if (tag === 'em' || tag === 'i') return `*${text}*`;
+      if (tag === 'code') return `\`${text}\``;
+      if (tag === 'a') {
+        try {
+          const url = new URL(node.getAttribute('href') || '', location.href);
+          if (url.protocol === 'https:') return `[${text}](${url.href})`;
+        } catch {
+          /* Keep text. */
+        }
       }
-
-      // Process child elements
-      Array.from(element.children).forEach(child => {
-        processElement(child, depth + 1);
-      });
+      if (tag === 'img') {
+        try {
+          const url = new URL(node.getAttribute('src') || '', location.href);
+          if (url.protocol === 'https:')
+            return `![${node.getAttribute('alt') || 'Image'}](${url.href})`;
+        } catch {
+          /* No image URL. */
+        }
+      }
+      return text;
     };
-
-    // Process the container
-    processElement(container);
-
-    return formattedContent;
+    return render(container).trim();
   }
 
   /**
@@ -307,9 +316,9 @@ export class CourseraExtractor {
     }
 
     // Keep the same canonical format as every other extractor. Missing times stay absent.
-    const formattedTranscript = entries.map(entry =>
-      entry.timestamp ? `[${entry.timestamp}] ${entry.text}` : entry.text
-    ).join('\n\n');
+    const formattedTranscript = entries
+      .map(entry => (entry.timestamp ? `[${entry.timestamp}] ${entry.text}` : entry.text))
+      .join('\n\n');
 
     return formattedTranscript;
   }
@@ -317,44 +326,275 @@ export class CourseraExtractor {
   /**
    * Extract course structure (for Coursera, this would be the course modules)
    */
-  static extractCourseStructure(): any {
-    try {
-      if (!this.isCourseraCoursePage()) {
-        return null;
-      }
+  private static discovered: Array<{
+    id: string;
+    title: string;
+    url: string;
+    kind: 'video' | 'article' | 'quiz';
+    section: string;
+    available: boolean;
+  }> = [];
+  private static group = '';
+  private static incomplete = false;
 
-      const videoInfo = this.getCurrentVideoInfo();
-      if (!videoInfo) {
-        return null;
+  static getKind(): 'video' | 'article' | 'quiz' | undefined {
+    return /\/(quiz|exam)\//.test(location.pathname)
+      ? 'quiz'
+      : /\/reading\//.test(location.pathname)
+        ? 'article'
+        : /\/lecture\//.test(location.pathname)
+          ? 'video'
+          : undefined;
+  }
+  static getSources(): string[] {
+    const found = new Set<string>();
+    for (const element of document.querySelectorAll<
+      HTMLAnchorElement | HTMLSourceElement | HTMLVideoElement
+    >(
+      'video, video source, a[download], .rc-Downloads a[href], [data-testid*="download"] a[href]'
+    )) {
+      const value =
+        element instanceof HTMLAnchorElement
+          ? element.href
+          : (element as HTMLVideoElement).currentSrc || (element as HTMLSourceElement).src;
+      try {
+        const url = new URL(value, location.href);
+        if (
+          url.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          /\.(mp4|m3u8)$/i.test(url.pathname)
+        )
+          found.add(url.href);
+      } catch {
+        /* Not a media URL. */
       }
-
-      // For Coursera, return a simple structure with just the current video
-      // In a full implementation, you might want to extract the course modules
-      return {
-        title: videoInfo.title,
-        instructor: 'Coursera Instructor',
-        sections: [{
-          title: 'Current Video',
-          lectures: [{
-            id: videoInfo.videoId,
-            title: videoInfo.title,
-            url: videoInfo.url,
-            isCompleted: false,
-            duration: 'Unknown'
-          }]
-        }],
-        currentLecture: {
-          id: videoInfo.videoId,
-          title: videoInfo.title,
-          url: videoInfo.url,
-          isCompleted: false,
-          duration: 'Unknown'
-        }
-      };
-    } catch (error) {
-      console.error('Error extracting Coursera course structure:', error);
-      return null;
     }
+    return [...found];
+  }
+  static getAudioSources(): string[] {
+    const found = new Set<string>();
+    for (const element of document.querySelectorAll<
+      HTMLAudioElement | HTMLSourceElement | HTMLAnchorElement
+    >(
+      'audio, audio source, a[download], .rc-Downloads a[href], [data-testid*="download"] a[href]'
+    )) {
+      const value =
+        element instanceof HTMLAnchorElement
+          ? element.href
+          : element instanceof HTMLAudioElement
+            ? element.currentSrc || element.src
+            : element.src;
+      try {
+        const url = new URL(value, location.href);
+        const type = element.getAttribute('type') || '';
+        if (
+          url.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          (/\.(mp3|m4a|webm)$/i.test(url.pathname) || type.startsWith('audio/'))
+        )
+          found.add(url.href);
+      } catch {
+        /* Not an exposed audio link. */
+      }
+    }
+    return [...found];
+  }
+  private static readItems(root: Document): typeof CourseraExtractor.discovered {
+    const prefix = location.pathname.match(/^\/learn\/[^/]+/)?.[0];
+    if (!prefix) return [];
+    const found: typeof CourseraExtractor.discovered = [];
+    for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+      let url: URL;
+      try {
+        url = new URL(link.getAttribute('href')!, location.href);
+      } catch {
+        continue;
+      }
+      if (url.origin !== location.origin || !url.pathname.startsWith(`${prefix}/`)) continue;
+      const match = url.pathname
+        .slice(prefix.length)
+        .match(/^\/(lecture|reading|quiz|exam)\/([^/]+)(?:\/|$)/);
+      if (!match || found.some(item => item.id === `${match[1]}:${match[2]}`)) continue;
+      const title = (
+        link.querySelector('[data-testid="item-title"], .item-title') || link
+      ).textContent?.trim();
+      if (!title) continue;
+      const section =
+        link
+          .closest('section, .rc-Module, [data-testid*="module"]')
+          ?.querySelector('h2,h3')
+          ?.textContent?.trim() || 'Course items';
+      url.search = '';
+      url.hash = '';
+      found.push({
+        id: `${match[1]}:${match[2]}`,
+        title,
+        url: url.href,
+        section,
+        kind: match[1] === 'lecture' ? 'video' : match[1] === 'reading' ? 'article' : 'quiz',
+        available:
+          link.getAttribute('aria-disabled') !== 'true' && !link.closest('[data-locked="true"]'),
+      });
+    }
+    return found;
+  }
+  /** Follow only course-outline URLs that the signed-in page actually exposes. */
+  static async loadAllItems(signal: AbortSignal): Promise<void> {
+    const prefix = location.pathname.match(/^\/learn\/[^/]+/)?.[0];
+    if (!prefix) return;
+    this.group = prefix;
+    this.discovered = [];
+    this.incomplete = false;
+    let expanded = false;
+    for (const button of document.querySelectorAll<HTMLButtonElement>(
+      '.rc-Module button[aria-expanded="false"], [data-testid*="syllabus"] button[aria-expanded="false"], nav[aria-label*="course" i] button[aria-expanded="false"]'
+    )) {
+      signal.throwIfAborted();
+      button.click();
+      expanded = true;
+    }
+    if (expanded) {
+      await new Promise<void>((resolve, reject) => {
+        const stop = () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', stop);
+          resolve();
+        }, 500);
+        signal.addEventListener('abort', stop, { once: true });
+      });
+      signal.throwIfAborted();
+    }
+    const merge = (items: typeof CourseraExtractor.discovered) => {
+      for (const item of items)
+        if (!this.discovered.some(value => value.id === item.id)) this.discovered.push(item);
+    };
+    merge(this.readItems(document));
+    const pages = new Set<string>();
+    const readPages = (root: Document) => {
+      for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+        try {
+          const url = new URL(link.getAttribute('href')!, location.href);
+          if (
+            url.origin === location.origin &&
+            (url.pathname === `${prefix}/home` || url.pathname.startsWith(`${prefix}/home/`))
+          ) {
+            url.hash = '';
+            url.search = '';
+            pages.add(url.href);
+          }
+        } catch {
+          /* Ignore unrelated links. */
+        }
+      }
+    };
+    readPages(document);
+    const visited = new Set<string>();
+    while ([...pages].some(url => !visited.has(url)) && visited.size < 100) {
+      signal.throwIfAborted();
+      const url = [...pages].find(value => !visited.has(value))!;
+      visited.add(url);
+      try {
+        const response = await fetch(url, { credentials: 'include', redirect: 'error', signal });
+        if (!response.ok) throw new Error('Outline unavailable.');
+        const html = await response.text();
+        if (html.length > 8_000_000) throw new Error('Outline is too large.');
+        const root = new DOMParser().parseFromString(html, 'text/html');
+        merge(this.readItems(root));
+        readPages(root);
+      } catch (err) {
+        signal.throwIfAborted();
+        this.incomplete = true;
+      }
+    }
+    if (pages.size > visited.size || !this.discovered.length) this.incomplete = true;
+    if (location.pathname.match(/^\/learn\/[^/]+/)?.[0] !== prefix)
+      throw new Error('The source changed while reading the course outline.');
+  }
+  static extractCourseStructure(): any {
+    if (!this.isCourseraCoursePage()) return null;
+    const prefix = location.pathname.match(/^\/learn\/[^/]+/)?.[0] || '';
+    const items = [...(this.group === prefix ? this.discovered : [])];
+    for (const item of this.readItems(document))
+      if (!items.some(value => value.id === item.id)) items.push(item);
+    const current = this.getCurrentVideoInfo();
+    const kind = this.getKind();
+    if (
+      current &&
+      kind &&
+      !items.some(item => item.url === current.url.split('?')[0].split('#')[0])
+    )
+      items.push({
+        id: current.videoId,
+        title: current.title,
+        url: current.url,
+        kind,
+        section: 'Current item',
+        available: true,
+      });
+    const sections = [...new Set(items.map(item => item.section))].map(title => ({
+      title,
+      lectures: items
+        .filter(item => item.section === title)
+        .map(item => ({ ...item, isCompleted: false, duration: 'Unknown' })),
+    }));
+    return {
+      title:
+        document
+          .querySelector('[data-testid="course-title"], .course-title')
+          ?.textContent?.trim() ||
+        document.querySelector('h1')?.textContent?.trim() ||
+        'Coursera',
+      instructor: '',
+      sections,
+      currentLecture: current,
+      totalItems: items.length,
+      loadedItems: items.length,
+      notice:
+        this.incomplete || items.length <= 1
+          ? 'Only discovered items are listed. Open the course outline and retry the list if modules are missing.'
+          : 'Practice/final tests export only questions visible to your session. Unopened or locked attempts are reported as unavailable.',
+    };
+  }
+  private static extractAssessment(): string {
+    const root = document.querySelector('main') || document.body;
+    const questions = [
+      ...root.querySelectorAll(
+        '.rc-FormPartsQuestion, [data-testid="question"], [data-testid="assessment-question"], [role="radiogroup"]'
+      ),
+    ].filter(element => {
+      if (element.closest('[hidden], [aria-hidden="true"]')) return false;
+      for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+      }
+      return !element.parentElement?.closest(
+        '.rc-FormPartsQuestion, [data-testid="question"], [data-testid="assessment-question"], [role="radiogroup"]'
+      );
+    });
+    if (!questions.length)
+      throw new Error(
+        'No visible test questions are available. Open an authorized attempt manually; the extension will not start or submit it.'
+      );
+    const title = this.getCurrentVideoInfo()?.title || 'Assessment';
+    const parts = questions.map((question, index) => {
+      const copy = question.cloneNode(true) as Element;
+      const originals = question.querySelectorAll('*');
+      const copies = copy.querySelectorAll('*');
+      originals.forEach((element, position) => {
+        const style = getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden') copies[position].remove();
+      });
+      copy
+        .querySelectorAll('script,style,button,input,textarea,select,[hidden],[aria-hidden="true"]')
+        .forEach(element => element.remove());
+      return `## Question ${index + 1}\n\n${copy.textContent?.trim() || 'Question text unavailable.'}`;
+    });
+    return `# ${title}\n\nSource: ${location.href}\n\nVisible-question snapshot only; this is not an interactive test or complete question bank.\n\n${parts.join('\n\n')}`;
   }
 
   /**
@@ -362,7 +602,7 @@ export class CourseraExtractor {
    */
   static testAllSelectors(): void {
     log.debug('🎯 Testing Coursera selectors...');
-    
+
     const selectors = [
       // Video transcript selectors
       '[role="tabpanel"]',
@@ -380,7 +620,7 @@ export class CourseraExtractor {
       'h1, h2, h3, h4, h5, h6',
       'p[data-text-variant="body1"]',
       '.rc-CodeBlock',
-      '.monaco-editor'
+      '.monaco-editor',
     ];
 
     selectors.forEach(selector => {

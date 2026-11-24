@@ -11,6 +11,8 @@ export async function loadPreferences(): Promise<Preferences> {
     video: typeof data?.video === 'boolean' ? data.video : true,
     transcript: typeof data?.transcript === 'boolean' ? data.transcript : true,
     automatic: typeof data?.automatic === 'boolean' ? data.automatic : false,
+    ...(data?.audio === true ? { audio: true } : {}),
+    ...(typeof data?.materials === 'boolean' ? { materials: data.materials } : {}),
     ...(data?.deleteFiles === true ? { deleteFiles: true } : {}),
     ...(data?.reload === true ? { reload: true } : {}),
     ...(data?.format === 'mp4' || data?.format === 'webm' ? { format: data.format } : {}),
@@ -40,6 +42,7 @@ async function openStore(): Promise<IDBDatabase> {
 export interface SavedFile {
   directory?: FileSystemDirectoryHandle;
   downloadId?: number;
+  kind?: 'video' | 'audio' | 'transcript';
   name: string;
   selection?: string;
 }

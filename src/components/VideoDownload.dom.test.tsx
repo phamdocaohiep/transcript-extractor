@@ -4,6 +4,18 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { VideoDownload } from './VideoDownload';
+import { extractAudio } from '../lib/audio-file';
+vi.mock('../lib/audio-file', async importOriginal => ({
+  ...(await importOriginal<typeof import('../lib/audio-file')>()),
+  extractAudio: vi.fn(async (_file, directory: FileSystemDirectoryHandle, base: string) => {
+    const writer = await (
+      await directory.getFileHandle(`${base}.m4a`, { create: true })
+    ).createWritable();
+    await writer.write(new Uint8Array([1, 2, 3]));
+    await writer.close();
+    return `${base}.m4a`;
+  }),
+}));
 import { createDestination, publishFile } from '../lib/download-manager';
 vi.mock('../lib/download-manager', () => ({
   createDestination: vi.fn(async () => ({
@@ -82,8 +94,11 @@ let hasPlayer = true;
 let hasSources = true;
 let listing: { id: string; title: string; url: string; kind?: string }[];
 beforeEach(() => {
+  vi.mocked(extractAudio).mockClear();
   nextDownloadId = 0;
   vi.mocked(publishFile).mockClear();
+  vi.mocked(recordFile).mockClear();
+  vi.mocked(extractAudio).mockClear();
   vi.mocked(createDestination).mockClear();
   // jsdom does not implement the native dialog methods.
   Object.defineProperties(HTMLDialogElement.prototype, {
@@ -169,7 +184,9 @@ beforeEach(() => {
             sources: hasSources && !textPages.has(currentUrl) ? [videoUrl] : [],
             hasPlayer: hasPlayer && !textPages.has(currentUrl),
             loading: false,
-            kind: textPages.has(currentUrl) || !hasPlayer ? 'article' : 'video',
+            kind:
+              listing.find(item => item.url === currentUrl)?.kind ||
+              (textPages.has(currentUrl) || !hasPlayer ? 'article' : 'video'),
             protected: protectedVideo,
           },
         };
@@ -197,8 +214,9 @@ beforeEach(() => {
   writes = {};
   folder = {
     getFileHandle: vi.fn(async (name: string, options?: { create?: boolean }) => {
-      if (!options?.create) throw new DOMException('Missing', 'NotFoundError');
+      if (!options?.create && !writes[name]) throw new DOMException('Missing', 'NotFoundError');
       return {
+        getFile: async () => new File([new Uint8Array([1, 2, 3])], name),
         createWritable: async () => {
           const writer = {
             write: vi.fn(async () => undefined),
@@ -242,6 +260,116 @@ async function click(label: string) {
   expect(button.disabled, label).toBe(false);
   await act(async () => button.click());
 }
+it('downloads Coursera readings, practice and final questions as documents without requesting media', async () => {
+  currentUrl = 'https://www.coursera.org/learn/test/reading/r1/notes';
+  listing = [
+    { id: 'reading:r1', kind: 'article', title: 'Reading', url: currentUrl },
+    {
+      id: 'quiz:q1',
+      kind: 'quiz',
+      title: 'Practice',
+      url: 'https://www.coursera.org/learn/test/quiz/q1/practice',
+    },
+    {
+      id: 'exam:e1',
+      kind: 'quiz',
+      title: 'Final',
+      url: 'https://www.coursera.org/learn/test/exam/e1/final',
+    },
+  ];
+  textPages = new Set(listing.map(item => item.url));
+  await render();
+  await click('Download');
+  expect(Object.keys(writes).filter(name => name.endsWith('.md'))).toHaveLength(3);
+  expect(Object.keys(writes).filter(name => name.endsWith('.mp4'))).toHaveLength(0);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('3/3 transcripts saved');
+});
+it('exports audio along with video and transcript and remembers all three artifacts', async () => {
+  currentUrl = 'https://www.coursera.org/learn/test/lecture/v1/video';
+  listing = [{ id: 'lecture:v1', kind: 'video', title: 'Video', url: currentUrl }];
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    audio: true,
+    automatic: false,
+  });
+  await render();
+  await click('Download');
+  expect(extractAudio).toHaveBeenCalledOnce();
+  expect(publishFile).toHaveBeenCalledTimes(3);
+  expect(
+    Object.values(stored).some(
+      value => !!value && typeof value === 'object' && 'audio' in value && value.audio === true
+    )
+  ).toBe(true);
+  expect(container.textContent).toContain('1 video, audio & transcript downloaded');
+  expect(vi.mocked(recordFile).mock.calls.map(([, file]) => file.kind)).toEqual([
+    'transcript',
+    'video',
+    'audio',
+  ]);
+});
+it('publishes only audio when video and transcript are unchecked', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: false,
+    transcript: false,
+    audio: true,
+    automatic: false,
+  });
+  await render();
+  await click('Download');
+  expect(publishFile).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(publishFile).mock.calls[0][1]).toMatch(/-audio\.m4a$/);
+  expect(vi.mocked(recordFile).mock.calls.map(([, file]) => file.kind)).toEqual(['audio']);
+  expect(container.textContent).toContain('1 audio downloaded');
+});
+it('retains successful video/transcript files when a separate audio export fails', async () => {
+  vi.mocked(loadPreferences).mockResolvedValue({
+    video: true,
+    transcript: true,
+    audio: true,
+    automatic: false,
+  });
+  vi.mocked(extractAudio).mockRejectedValueOnce(new Error('No audio track.'));
+  await render();
+  await click('Download');
+  expect(publishFile).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain('audio unavailable');
+  expect(container.textContent).toContain('No audio track');
+  expect(
+    Object.values(stored).some(
+      value => !!value && typeof value === 'object' && 'audio' in value && value.audio === false
+    )
+  ).toBe(true);
+});
+it('keeps an unavailable assessment failure separate and continues saving other documents', async () => {
+  currentUrl = 'https://www.coursera.org/learn/test/quiz/q1/practice';
+  listing = [
+    { id: 'quiz:q1', kind: 'quiz', title: 'Practice', url: currentUrl },
+    {
+      id: 'reading:r1',
+      kind: 'article',
+      title: 'Notes',
+      url: 'https://www.coursera.org/learn/test/reading/r1/notes',
+    },
+  ];
+  textPages = new Set(listing.map(item => item.url));
+  const send = vi.mocked(chrome.tabs.sendMessage).getMockImplementation()!;
+  vi.mocked(chrome.tabs.sendMessage).mockImplementation(async (...args) =>
+    (args[1] as { type: string }).type === 'EXTRACT_TRANSCRIPT' && currentUrl.includes('/quiz/')
+      ? { success: false, error: 'No visible test questions are available.' }
+      : send(...args)
+  );
+  stored.transcriptExtractorState = { includeTimestamps: false };
+  await render();
+  await click('Download');
+  expect(publishFile).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain('1 failed');
+  expect(container.textContent).toContain('No visible test questions');
+  expect(chrome.tabs.reload).not.toHaveBeenCalled();
+});
 it('detects available HLS qualities and downloads the selected resolution', async () => {
   const original = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (...args) =>

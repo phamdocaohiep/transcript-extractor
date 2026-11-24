@@ -9,7 +9,9 @@ export async function revealSaved(
   choice: Pick<Preferences, 'format' | 'maxHeight'> = {}
 ): Promise<{ exact: boolean }> {
   const files = (await loadFiles(completionKey(url))).filter(file => file.downloadId !== undefined);
-  const videos = [...files].reverse().filter(file => /\.(mp4|webm)$/i.test(file.name));
+  const videos = [...files]
+    .reverse()
+    .filter(file => file.kind !== 'audio' && /\.(mp4|webm)$/i.test(file.name));
   const file =
     videos.find(value => value.selection === selectionKey(choice)) || videos[0] || files.at(-1);
   if (!file) {
